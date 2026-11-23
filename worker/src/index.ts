@@ -20,6 +20,7 @@ import {
 } from "./security";
 import { asCents, dueDate, lineTotal, reminderDate, sumLines } from "./finance";
 import distributionRoutes from "./distribution";
+import logisticsRoutes from "./logistics";
 import creditAlertsRoutes, { processReminders } from "./credit-alerts";
 import { renderPublicInvoiceHtml } from "./public-invoice";
 const app = new Hono<Env>();
@@ -277,11 +278,20 @@ app.get("/view/invoice/:token", async (c) => {
       .bind(invoice.id)
       .all()
   ).results;
+  // The global CSP (default-src 'none') blocks this page's inline styles, so
+  // customers saw unstyled HTML. This page only: allow its own inline styles,
+  // same-origin images and one nonce'd script for the print button.
+  const nonce = crypto.randomUUID().replace(/-/g, "");
+  c.header(
+    "Content-Security-Policy",
+    `default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+  );
   const html = renderPublicInvoiceHtml({
     invoice,
     items,
     showShopPrice: (invoice as any).show_shop_price === "true",
     showCustomerWhatsapp: (invoice as any).show_customer_whatsapp !== "false",
+    nonce,
   });
   return c.html(html);
 });
@@ -309,6 +319,7 @@ app.get("/api/public/invoices/:token", async (c) => {
 
 app.use("/api/*", requireUser);
 app.route("/api", distributionRoutes);
+app.route("/api", logisticsRoutes);
 app.route("/api", creditAlertsRoutes);
 app.get("/api/me", async (c) => c.json({ user: current(c) }));
 app.post("/api/logout", async (c) => {
@@ -455,6 +466,7 @@ app.post("/api/users", async (c) => {
   if (existingEmail) return c.json({ error: "Email already taken" }, 400);
 
   const id = uuid();
+  const stockWarehouseId = uuid();
   const pwHash = await passwordHash(d.password);
   const pinHash = d.passcode ? await passwordHash(d.passcode) : null;
 
@@ -473,10 +485,11 @@ app.post("/api/users", async (c) => {
       now(),
     ),
     c.env.DB.prepare("INSERT INTO warehouses VALUES(?,?,?)").bind(
-      uuid(),
+      stockWarehouseId,
       `${d.name} stock`,
       id,
     ),
+    c.env.DB.prepare("INSERT INTO warehouse_metadata(warehouse_id,location_type,active) VALUES(?,'sales_rep',1)").bind(stockWarehouseId),
   ]);
   await audit(c.env.DB, current(c).id, "user.created", id);
   return c.json({ id }, 201);
@@ -841,7 +854,12 @@ app.get("/api/stock", async (c) => {
   return c.json(
     (
       await c.env.DB.prepare(
-        `SELECT b.*,v.label,p.name,w.name AS warehouse FROM stock_balances b JOIN product_variants v ON v.id=b.variant_id JOIN products p ON p.id=v.product_id JOIN warehouses w ON w.id=b.warehouse_id WHERE (?=1 OR w.rep_id=?) ORDER BY p.name LIMIT 500`,
+        `SELECT b.*,v.label,p.name,w.name AS warehouse,COALESCE(wm.location_type,CASE WHEN w.rep_id IS NULL THEN 'warehouse' ELSE 'sales_rep' END) AS location_type,
+          COALESCE(s.reserved_quantity,0) AS reserved_quantity,COALESCE(s.allocated_quantity,0) AS allocated_quantity,COALESCE(s.damaged_quantity,0) AS damaged_quantity,
+          MAX(0,b.quantity-COALESCE(s.reserved_quantity,0)-COALESCE(s.allocated_quantity,0)) AS available_quantity
+         FROM stock_balances b JOIN product_variants v ON v.id=b.variant_id JOIN products p ON p.id=v.product_id JOIN warehouses w ON w.id=b.warehouse_id
+         LEFT JOIN warehouse_metadata wm ON wm.warehouse_id=w.id LEFT JOIN stock_balance_status s ON s.warehouse_id=b.warehouse_id AND s.variant_id=b.variant_id
+         WHERE (?=1 OR w.rep_id=?) ORDER BY p.name LIMIT 500`,
       )
         .bind(p.admin, p.id)
         .all()

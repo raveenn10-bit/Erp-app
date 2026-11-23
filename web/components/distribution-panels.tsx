@@ -41,6 +41,7 @@ type Line = {
   discountType: "fixed" | "percent";
   discountValue: number;
 };
+type ActiveRoute={id:string;route_name:string;route_date:string;registration_number:string;stock_warehouse_id:string;status:string};
 const today = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" });
 const cents = (value: number) =>
@@ -313,8 +314,10 @@ export function BillingPanel({
     settings = useQuery({
       queryKey: ["billing-settings"],
       queryFn: () => api<Record<string, string>>("/billing/settings"),
-    });
+    }),
+    activeRoutes = useQuery({queryKey:["daily-routes"],queryFn:()=>api<ActiveRoute[]>("/daily-routes")});
   const [customerId, setCustomer] = useState(""),
+    [routeId,setRouteId]=useState(""),
     [customerWhatsapp, setCustomerWhatsapp] = useState(""),
     [showLivePreview, setShowLivePreview] = useState(false),
     [warehouseId, setWarehouse] = useState("main"),
@@ -341,6 +344,8 @@ export function BillingPanel({
     [draftId, setDraftId] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const routeDetail=useQuery({queryKey:["route-detail",routeId],queryFn:()=>api<any>(`/daily-routes/${routeId}`),enabled:!!routeId});
+  const routeCustomerIds=useMemo(()=>new Set((routeDetail.data?.shops||[]).map((x:any)=>x.customer_id)),[routeDetail.data]);
   const totals = useMemo(() => {
     let subtotal = 0,
       itemDiscount = 0;
@@ -376,6 +381,7 @@ export function BillingPanel({
     return {
       customerId,
       warehouseId,
+      routeId: routeId || undefined,
       invoiceDate,
       items: lines
         .filter((x) => x.variantId)
@@ -558,6 +564,7 @@ export function BillingPanel({
     setDraftId(d.id);
     setCustomer(p.customerId);
     setWarehouse(p.warehouseId);
+    setRouteId(p.routeId||"");
     setInvoiceDate(p.invoiceDate);
     setLines(
       (p.items || []).map((x: any) => ({
@@ -599,6 +606,13 @@ export function BillingPanel({
         {error && <div className="error">{error}</div>}
         <div className="form-grid">
           <label>
+            Daily route (optional)
+            <select value={routeId} onChange={(e)=>{const id=e.target.value;setRouteId(id);const route=activeRoutes.data?.find(r=>r.id===id);if(route)setWarehouse(route.stock_warehouse_id)}}>
+              <option value="">Non-route invoice</option>
+              {(activeRoutes.data||[]).filter(r=>r.status==="In Progress").map(r=><option key={r.id} value={r.id}>{r.route_name} · {r.registration_number}</option>)}
+            </select>
+          </label>
+          <label>
             Customer / Shop
             <select
               value={customerId}
@@ -606,7 +620,7 @@ export function BillingPanel({
               required
             >
               <option value="">Select a shop</option>
-              {customers.map((c) => (
+              {(routeId?customers.filter(c=>routeCustomerIds.has(c.id)):customers).map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.shop_name}
                 </option>
@@ -618,6 +632,7 @@ export function BillingPanel({
             <select
               value={warehouseId}
               onChange={(e) => setWarehouse(e.target.value)}
+              disabled={!!routeId}
             >
               {warehouses(stocks).map(([id, name]) => (
                 <option value={id} key={id}>
@@ -823,8 +838,9 @@ export function FreeIssuePanel({
     history = useQuery({
       queryKey: ["free-issues"],
       queryFn: () => api<Issue[]>("/free-issues"),
-    }),
+    }),activeRoutes=useQuery({queryKey:["daily-routes"],queryFn:()=>api<ActiveRoute[]>("/daily-routes")}),
     [customerId, setCustomer] = useState(""),
+    [routeId,setRouteId]=useState(""),
     [warehouseId, setWarehouse] = useState("main"),
     [reason, setReason] = useState("sample"),
     [notes, setNotes] = useState(""),
@@ -841,6 +857,8 @@ export function FreeIssuePanel({
     ]),
     [error, setError] = useState(""),
     [documentId, setDocumentId] = useState<string | null>(null);
+  const routeDetail=useQuery({queryKey:["route-detail",routeId],queryFn:()=>api<any>(`/daily-routes/${routeId}`),enabled:!!routeId});
+  const routeCustomerIds=useMemo(()=>new Set((routeDetail.data?.shops||[]).map((x:any)=>x.customer_id)),[routeDetail.data]);
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -850,6 +868,7 @@ export function FreeIssuePanel({
         body: JSON.stringify({
           customerId,
           warehouseId,
+          routeId: routeId || undefined,
           issueDate: today(),
           reason,
           notes,
@@ -889,6 +908,7 @@ export function FreeIssuePanel({
         {error && <div className="error">{error}</div>}
         <form onSubmit={create}>
           <div className="form-grid">
+            <label>Daily route (optional)<select value={routeId} onChange={e=>{const id=e.target.value;setRouteId(id);const route=activeRoutes.data?.find(r=>r.id===id);if(route)setWarehouse(route.stock_warehouse_id)}}><option value="">Non-route issue</option>{(activeRoutes.data||[]).filter(r=>r.status==="In Progress").map(r=><option key={r.id} value={r.id}>{r.route_name} · {r.registration_number}</option>)}</select></label>
             <label>
               Shop
               <select
@@ -897,7 +917,7 @@ export function FreeIssuePanel({
                 onChange={(e) => setCustomer(e.target.value)}
               >
                 <option value="">Select shop</option>
-                {customers.map((c) => (
+                {(routeId?customers.filter(c=>routeCustomerIds.has(c.id)):customers).map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.shop_name}
                   </option>
@@ -909,6 +929,7 @@ export function FreeIssuePanel({
               <select
                 value={warehouseId}
                 onChange={(e) => setWarehouse(e.target.value)}
+                disabled={!!routeId}
               >
                 {warehouses(stocks).map(([id, name]) => (
                   <option key={id} value={id}>
@@ -1037,7 +1058,7 @@ export function ConsignmentPanel({
     history = useQuery({
       queryKey: ["consignments"],
       queryFn: () => api<Consignment[]>("/consignments"),
-    }),
+    }),activeRoutes=useQuery({queryKey:["daily-routes"],queryFn:()=>api<ActiveRoute[]>("/daily-routes")}),
     [selected, setSelected] = useState<string | null>(null),
     detail = useQuery({
       queryKey: ["consignment", selected],
@@ -1045,6 +1066,7 @@ export function ConsignmentPanel({
       enabled: !!selected,
     }),
     [customerId, setCustomer] = useState(""),
+    [routeId,setRouteId]=useState(""),
     [warehouseId, setWarehouse] = useState("main"),
     [expected, setExpected] = useState(""),
     [notes, setNotes] = useState(""),
@@ -1060,6 +1082,8 @@ export function ConsignmentPanel({
       },
     ]),
     [error, setError] = useState("");
+  const routeDetailForIssue=useQuery({queryKey:["route-detail",routeId],queryFn:()=>api<any>(`/daily-routes/${routeId}`),enabled:!!routeId});
+  const routeCustomerIds=useMemo(()=>new Set((routeDetailForIssue.data?.shops||[]).map((x:any)=>x.customer_id)),[routeDetailForIssue.data]);
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -1069,6 +1093,7 @@ export function ConsignmentPanel({
         body: JSON.stringify({
           customerId,
           warehouseId,
+          routeId: routeId || undefined,
           issueDate: today(),
           expectedSettlementDate: expected || null,
           notes,
@@ -1164,6 +1189,7 @@ export function ConsignmentPanel({
         {error && <div className="error">{error}</div>}
         <form onSubmit={create}>
           <div className="form-grid">
+            <label>Daily route (optional)<select value={routeId} onChange={e=>{const id=e.target.value;setRouteId(id);const route=activeRoutes.data?.find(r=>r.id===id);if(route)setWarehouse(route.stock_warehouse_id)}}><option value="">Non-route consignment</option>{(activeRoutes.data||[]).filter(r=>r.status==="In Progress").map(r=><option key={r.id} value={r.id}>{r.route_name} · {r.registration_number}</option>)}</select></label>
             <label>
               Shop
               <select
@@ -1172,7 +1198,7 @@ export function ConsignmentPanel({
                 onChange={(e) => setCustomer(e.target.value)}
               >
                 <option value="">Select shop</option>
-                {customers.map((c) => (
+                {(routeId?customers.filter(c=>routeCustomerIds.has(c.id)):customers).map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.shop_name}
                   </option>
@@ -1184,6 +1210,7 @@ export function ConsignmentPanel({
               <select
                 value={warehouseId}
                 onChange={(e) => setWarehouse(e.target.value)}
+                disabled={!!routeId}
               >
                 {warehouses(stocks).map(([id, name]) => (
                   <option key={id} value={id}>
