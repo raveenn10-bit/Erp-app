@@ -7,6 +7,21 @@ export { apiBase };
 /** Fired when the server says the session is gone, so the UI can return to login. */
 export const SESSION_EXPIRED_EVENT='erp-session-expired';
 
+/** Turn database/server error text into a clear bilingual message for the user. */
+export function friendlyError(raw: string): string {
+  const m = (raw || '').toLowerCase();
+  if (m.includes('insufficient stock')) return 'Not enough stock in this warehouse for one of the products. Add stock first (Inventory → Adjust stock) or lower the quantity. · තොග ප්‍රමාණවත් නැත — පළමුව තොග එකතු කරන්න.';
+  if (m.includes('credit limit exceeded')) return "This sale is over the customer's credit limit. Collect more payment now or raise the credit limit in Customers. · ණය සීමාව ඉක්මවයි.";
+  if (m.includes('payment exceeds')) return 'Payment is more than the invoice amount. · ගෙවීම බිල්පතට වඩා වැඩියි.';
+  if (m.includes('invoice not payable')) return 'This invoice cannot take payments (cancelled or closed). · මෙම බිල්පතට ගෙවිය නොහැක.';
+  if (m.includes('immutable')) return 'A finalized invoice cannot be changed. Use a credit note or return instead. · අවසන් කළ බිල්පත වෙනස් කළ නොහැක.';
+  if (m.includes('unique constraint') || m.includes('already exists')) return 'This record already exists. · මෙය දැනටමත් ඇත.';
+  if (m.startsWith('[') && m.includes('"path"')) {
+    try { const issue = JSON.parse(raw)[0]; return `Please check "${(issue.path || []).join(' › ') || 'the form'}": ${issue.message}`; } catch { /* fall through */ }
+  }
+  return raw.replace(/^D1_ERROR:\s*/i, '').replace(/:\s*SQLITE_CONSTRAINT.*$/i, '') || 'Request failed';
+}
+
 export class ApiError extends Error { constructor(msg:string, public status:number){ super(msg); this.name='ApiError'; } }
 
 export async function api<T>(path:string,init:RequestInit={}):Promise<T>{
@@ -32,7 +47,7 @@ export async function api<T>(path:string,init:RequestInit={}):Promise<T>{
       :'Cannot reach the ERP server. Please try again.');
   }
   if(r.status===401&&path!=='/login'&&typeof window!=='undefined')window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
-  if(!r.ok)throw new ApiError(r.data?.error||'Request failed',r.status);
+  if(!r.ok)throw new ApiError(friendlyError(String(r.data?.error||'Request failed')),r.status);
   if(offline&&method==='GET')offline.cachePut(path,r.data).catch(()=>{});
   return r.data as T;
 }

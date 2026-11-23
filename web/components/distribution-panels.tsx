@@ -439,7 +439,7 @@ export function BillingPanel({
       });
       await client.invalidateQueries({ queryKey: ["invoice-drafts"] });
     } catch (e) {
-      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     } finally {
       setBusy(false);
     }
@@ -455,7 +455,7 @@ export function BillingPanel({
       await client.invalidateQueries();
       onPosted(result.id);
     } catch (e) {
-      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     } finally {
       setBusy(false);
     }
@@ -506,7 +506,7 @@ export function BillingPanel({
 
       onPosted(result.id);
     } catch (e) {
-      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     } finally {
       setBusy(false);
     }
@@ -756,6 +756,7 @@ export function BillingPanel({
             </strong>
           </div>
         </div>
+        {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
         <div className="form-actions">
           <button
             className="secondary"
@@ -889,7 +890,7 @@ export function FreeIssuePanel({
       await client.invalidateQueries({ queryKey: ["free-issues"] });
       setDocumentId(result.id);
     } catch (e) {
-      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     }
   }
   return (
@@ -985,7 +986,8 @@ export function FreeIssuePanel({
             setLines={setLines}
             products={products}
           />
-          <div className="form-actions">
+          {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
+        <div className="form-actions">
             <button className="primary">Confirm free issue</button>
           </div>
         </form>
@@ -1117,7 +1119,7 @@ export function ConsignmentPanel({
       await client.invalidateQueries({ queryKey: ["consignments"] });
       setSelected(r.id);
     } catch (e) {
-      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     }
   }
   async function settle(e: React.FormEvent<HTMLFormElement>) {
@@ -1147,7 +1149,7 @@ export function ConsignmentPanel({
       await client.invalidateQueries();
       onInvoice(r.invoiceId);
     } catch (e) {
-      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     }
     void item;
   }
@@ -1171,7 +1173,7 @@ export function ConsignmentPanel({
       });
       await client.invalidateQueries();
     } catch (e) {
-      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     }
   }
   return (
@@ -1261,7 +1263,8 @@ export function ConsignmentPanel({
             setLines={setLines}
             products={products}
           />
-          <div className="form-actions">
+          {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
+        <div className="form-actions">
             <button className="primary">Create delivery note</button>
           </div>
         </form>
@@ -1349,7 +1352,8 @@ export function ConsignmentPanel({
                   <option value="bank">Bank</option>
                 </select>
               </label>
-              <div className="form-actions">
+              {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
+        <div className="form-actions">
                 <button className="primary">Generate sales invoice</button>
               </div>
             </form>
@@ -1389,7 +1393,8 @@ export function ConsignmentPanel({
                 Received by
                 <input name="receivedBy" required />
               </label>
-              <div className="form-actions">
+              {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
+        <div className="form-actions">
                 <button className="primary">Record return</button>
               </div>
             </form>
