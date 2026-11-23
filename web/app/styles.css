@@ -1022,3 +1022,15 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
 .bio-settings-row small { display: block; color: var(--brand-text-muted, #647773); margin-top: 2px; }
 .bio-settings-icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: #0C5051; color: #92FD6F; }
 .bio-settings { margin-bottom: 16px; }
+
+/* ---------- In-app update notice ---------- */
+.upd-wrap { position: fixed; left: 0; right: 0; top: calc(env(safe-area-inset-top, 0px) + 10px); z-index: 1900; display: flex; justify-content: center; padding: 0 10px; animation: rise .3s var(--ease, ease); }
+.upd-card { position: relative; width: min(520px, 100%); background: #0C5051; color: #fff; border-radius: 18px; padding: 14px 14px 12px; box-shadow: 0 16px 40px rgba(8,40,41,.35); display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; align-items: center; }
+.upd-icon { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #92FD6F; color: #0C5051; }
+.upd-text b { display: block; font-size: 15px; padding-right: 26px; }
+.upd-text small { display: block; opacity: .85; font-size: 12.5px; margin-top: 2px; }
+.upd-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1.6fr 1fr; gap: 8px; }
+.upd-actions .primary { background: #92FD6F !important; color: #0C5051 !important; border: 0; font-weight: 800; justify-content: center; display: inline-flex; gap: 6px; align-items: center; }
+.upd-actions .secondary { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.4); justify-content: center; }
+.upd-x { position: absolute; top: 6px; right: 6px; background: none; border: 0; color: #fff; opacity: .8; padding: 8px; min-height: 0 !important; }
+.upd-hint { grid-column: 1 / -1; margin: 0; font-size: 12px; opacity: .8; }

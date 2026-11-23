@@ -147,12 +147,14 @@ jobs:
           path: dist
 
       - name: Create release with fixed APK name
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           cp dist/*.apk Nugathalawa-ERP.apk
           gh release create "$TAG" Nugathalawa-ERP.apk \
             --target "$GITHUB_SHA" \
             --title "Nugathalawa ERP 1.0.${{ github.run_number }}" \
-            --notes "Android test build from \`${GITHUB_REF_NAME}\` @ ${GITHUB_SHA::7}. Direct download: https://github.com/${GH_REPO}/releases/latest/download/Nugathalawa-ERP.apk" \
+            --notes "$(printf '%s\n\nAndroid test build from %s @ %s\nDirect download: https://github.com/%s/releases/latest/download/Nugathalawa-ERP.apk' "${COMMIT_MSG%%$'\n'*}" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" "$GH_REPO")" \
             --latest
 
       - name: Keep only the 5 newest app releases

@@ -4,6 +4,7 @@ import { WifiOff } from 'lucide-react';
 import { initNativeShell, isNative } from '@/lib/native';
 import { SESSION_EXPIRED_EVENT } from '@/lib/api';
 import { onBiometricLock } from '@/lib/biometric';
+import { UpdateNotice } from '@/components/update-notice';
 
 /** Closes the top-most dialog/drawer. Returns true if something was closed. */
 function closeTopOverlay(): boolean {
@@ -45,10 +46,14 @@ export function NativeShell() {
     onBiometricLock(expired).then(fn => { unlock = fn; });
     return () => { remove?.(); unlock?.(); window.removeEventListener(SESSION_EXPIRED_EVENT, expired); };
   }, []);
-  if (online) return null;
   return (
-    <div className="net-banner" role="status" aria-live="polite">
-      <WifiOff size={16} /> Offline — changes can’t be saved until you reconnect. <span lang="si">අන්තර්ජාලය නොමැත</span>
-    </div>
+    <>
+      <UpdateNotice />
+      {!online && (
+        <div className="net-banner" role="status" aria-live="polite">
+          <WifiOff size={16} /> Offline — changes can’t be saved until you reconnect. <span lang="si">අන්තර්ජාලය නොමැත</span>
+        </div>
+      )}
+    </>
   );
 }
