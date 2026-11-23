@@ -48,6 +48,7 @@ import {
   ChevronRight,
   ReceiptText,
   UserRound,
+  BookOpen,
   Wallet,
   MoreHorizontal,
   TrendingUp,
@@ -56,6 +57,7 @@ import {
 import { api, idempotency, money } from "@/lib/api";
 import { InvoiceActions } from "@/components/invoice-actions";
 import { BiometricSettings } from "@/components/biometric-login";
+import { UserGuide } from "@/components/user-guide";
 import { disableBiometric } from "@/lib/biometric";
 import { isNative } from "@/lib/native";
 import { ReportsPanel } from "@/components/reports-panel";
@@ -151,6 +153,7 @@ const menu = [
   { name: "Team", si: "කණ්ඩායම", icon: Users },
   { name: "Settings", si: "සැකසුම්", icon: Settings },
   { name: "Profile", si: "මගේ ගිණුම", icon: UserRound },
+  { name: "Help", si: "මාර්ගෝපදේශය", icon: BookOpen },
 ];
 const siLabel = (name: string) => menu.find((m) => m.name === name)?.si || "";
 const queryClient = new QueryClient({
@@ -854,6 +857,7 @@ function Workspace() {
               </div>
             </>
           )}
+          {tab === "Help" && <UserGuide user={user} />}
           {tab === "Profile" && (
             <>
               <Lead
