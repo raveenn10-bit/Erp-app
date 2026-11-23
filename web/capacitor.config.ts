@@ -9,7 +9,7 @@ const config: CapacitorConfig = {
     // Never allow cleartext HTTP or debugging of the WebView in release builds.
     allowMixedContent: false,
     webContentsDebuggingEnabled: false,
-    backgroundColor: '#0C5051',
+    backgroundColor: '#064808',
   },
   plugins: {
     // API calls go through the native HTTP stack: no browser CORS, and the
@@ -19,7 +19,7 @@ const config: CapacitorConfig = {
     SplashScreen: {
       launchShowDuration: 1200,
       launchAutoHide: true,
-      backgroundColor: '#0C5051',
+      backgroundColor: '#064808',
       androidScaleType: 'CENTER_CROP',
       showSpinner: false,
     },
