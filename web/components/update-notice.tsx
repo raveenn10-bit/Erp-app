@@ -9,14 +9,17 @@ export function UpdateNotice() {
   const [upd, setUpd] = useState<UpdateInfo | null>(null);
   useEffect(() => {
     if (!isNative()) return;
-    const run = () => checkForUpdate().then(setUpd).catch(() => {});
-    const t = setTimeout(run, 2500); // let the app settle first
+    const run = (force = false) => checkForUpdate(force).then(setUpd).catch(() => {});
+    const manual = () => run(true);
+    window.addEventListener('erp-check-update', manual);
+    const t = setTimeout(() => run(true), 2500); // always check on app start
     let remove: (() => void) | undefined;
     import('@capacitor/app').then(async ({ App }) => {
       const h = await App.addListener('appStateChange', s => { if (s.isActive) run(); });
       remove = () => h.remove();
     });
-    return () => { clearTimeout(t); remove?.(); };
+    const every = setInterval(() => run(), 10 * 60 * 1000); // and every 10 minutes while open
+    return () => { clearTimeout(t); clearInterval(every); remove?.(); window.removeEventListener('erp-check-update', manual); };
   }, []);
   if (!upd) return null;
   const later = () => { snoozeUpdate(upd); setUpd(null); };

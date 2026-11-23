@@ -1116,3 +1116,4 @@ select[multiple] option { padding: 8px; border-radius: 7px; }
 .sync-pill.st-conflict { background: #fff1d6; color: #8a4b00; } .sync-pill.st-failed { background: #fdecec; color: #8a1c1c; }
 .sync-row-actions { display: flex; gap: 8px; margin-top: 6px; } .sync-row-actions .danger { color: #8a1c1c; }
 .sync-foot { margin: 0; font-size: 11.5px; color: var(--brand-text-muted, #647773); }
+.sync-ver { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12.5px; color: var(--brand-text-muted, #647773); border-top: 1px solid var(--brand-border, #DDEBE5); padding-top: 10px; }

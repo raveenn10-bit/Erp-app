@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, CloudOff, CloudUpload, Loader2, RefreshCw, Trash2, X, XCircle } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { OutboxRow, SyncState } from '@/lib/offline/store';
-import { isNative } from '@/lib/native';
+import { isNative, toast } from '@/lib/native';
+import { appVersion, checkForUpdate } from '@/lib/updates';
 
 type Store = typeof import('@/lib/offline/store');
 
@@ -49,6 +50,12 @@ export function SyncIndicator() {
 
 function SyncCenter({ store, s, close }: { store: Store; s: SyncState; close: () => void }) {
   const [rows, setRows] = useState<OutboxRow[]>([]);
+  const [ver, setVer] = useState('');
+  useEffect(() => { appVersion().then(setVer).catch(() => {}); }, []);
+  async function checkUpdate() {
+    const u = await checkForUpdate(true).catch(() => null);
+    if (u) { window.dispatchEvent(new Event('erp-check-update')); close(); } else toast('You have the latest version · නවතම අනුවාදය ඇත');
+  }
   const load = () => store.listOutbox().then(setRows).catch(() => setRows([]));
   useEffect(() => { load(); }, [s.pending, s.conflicts, s.failed, s.syncing]); // eslint-disable-line react-hooks/exhaustive-deps
   const l = label(s);
@@ -91,6 +98,7 @@ function SyncCenter({ store, s, close }: { store: Store; s: SyncState; close: ()
             </li>
           ))}
         </ul>
+        <div className="sync-ver"><span>App version {ver}</span><button className="secondary" onClick={checkUpdate}><RefreshCw size={14} />Check for updates</button></div>
         <p className="sync-foot">Conflicts are kept on the phone until you retry (after fixing stock or the customer) or discard them. Nothing is deleted automatically. Android may pause syncing while the app is closed — it resumes when you open the app.</p>
       </div>
     </div>

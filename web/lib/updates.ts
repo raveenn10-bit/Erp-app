@@ -7,8 +7,8 @@ import { isNative } from './native';
 
 const REPO = 'raveenn10-bit/Erp-app';
 export const APK_URL = `https://github.com/${REPO}/releases/latest/download/Nugathalawa-ERP.apk`;
-const CHECK_EVERY_MS = 3 * 60 * 60 * 1000; // at most every 3 hours (GitHub API limits)
-const SNOOZE_MS = 12 * 60 * 60 * 1000;
+const CHECK_EVERY_MS = 2 * 60 * 1000; // re-check at most every 2 minutes (well within GitHub's 60 requests/hour)
+const SNOOZE_MS = 2 * 60 * 60 * 1000; // 'Later' hides a version for 2 hours
 
 export type UpdateInfo = { version: string; code: number; current: string; notes: string; url: string };
 
@@ -46,7 +46,7 @@ export async function checkForUpdate(force = false): Promise<UpdateInfo | null> 
     url: asset?.browser_download_url || APK_URL,
   };
   await pref('update-available', JSON.stringify(upd));
-  return filterSnoozed(upd);
+  return force ? upd : filterSnoozed(upd); // a manual / start-up check always shows it
 }
 
 async function filterSnoozed(u: UpdateInfo): Promise<UpdateInfo | null> {
@@ -54,3 +54,10 @@ async function filterSnoozed(u: UpdateInfo): Promise<UpdateInfo | null> {
   return Date.now() < until ? null : u;
 }
 export async function snoozeUpdate(u: UpdateInfo) { await pref(`update-snooze-${u.code}`, String(Date.now() + SNOOZE_MS)); }
+
+export async function appVersion(): Promise<string> {
+  if (!isNative()) return '';
+  const { App } = await import('@capacitor/app');
+  const i = await App.getInfo();
+  return `${i.version} (${i.build})`;
+}
