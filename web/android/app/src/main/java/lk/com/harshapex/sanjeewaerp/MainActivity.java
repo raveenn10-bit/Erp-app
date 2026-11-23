@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
         // Local plugins must be registered before super.onCreate().
         registerPlugin(NativePrintPlugin.class);
         registerPlugin(ThermalPrinterPlugin.class);
+        registerPlugin(BiometricAuthPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

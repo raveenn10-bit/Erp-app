@@ -999,3 +999,26 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
 .rcpt-rt { text-align: right; } .rcpt-item { margin-bottom: 6px; }
 .rcpt-sign { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 30px; text-align: center; }
 .rcpt-sign i { display: block; border-top: 2px solid #000; margin-bottom: 4px; }
+
+/* ---------- Biometric login ---------- */
+.bio-panel { display: grid; justify-items: center; gap: 12px; padding: 6px 0 4px; text-align: center; }
+.bio-orb { width: 104px; height: 104px; border-radius: 50%; display: grid; place-items: center; border: 0; color: #92FD6F; background: radial-gradient(circle at 30% 25%, #287E65, #0C5051 70%); box-shadow: 0 14px 34px rgba(12,80,81,.35); cursor: pointer; }
+.bio-orb:disabled { opacity: .85; }
+.bio-hello { margin: 4px 0 0; font-weight: 700; color: var(--brand-text, #142C2A); font-size: 16px; }
+.bio-btn { display: inline-flex; gap: 8px; align-items: center; justify-content: center; background: var(--brand-primary, #0C5051) !important; color: #fff !important; min-height: 50px; }
+.bio-si { font-size: 13px; color: var(--brand-text-muted, #647773); margin-top: -4px; }
+.bio-fallback, .bio-switch { display: inline-flex; gap: 6px; align-items: center; justify-content: center; background: none; border: 0; color: var(--brand-secondary, #287E65); font-weight: 700; font-size: 14px; padding: 10px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.bio-switch { width: 100%; margin: -6px 0 10px; }
+.bio-sheet-backdrop { position: fixed; inset: 0; z-index: 1500; background: rgba(8,40,41,.55); display: flex; align-items: flex-end; justify-content: center; animation: fade .2s var(--ease, ease); }
+.bio-sheet { position: relative; width: min(480px, 100%); background: #fff; border-radius: 24px 24px 0 0; padding: 26px 22px calc(22px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 10px; text-align: center; animation: rise .26s var(--ease, ease); }
+.bio-sheet h3 { margin: 4px 0 0; font-size: 20px; color: var(--brand-primary, #0C5051); }
+.bio-sheet p { margin: 0; color: var(--brand-text-muted, #647773); font-size: 14px; }
+.bio-sheet-icon { width: 68px; height: 68px; margin: 0 auto; border-radius: 50%; display: grid; place-items: center; background: #0C5051; color: #92FD6F; }
+.bio-sheet-close { position: absolute; right: 12px; top: 12px; background: none; border: 0; padding: 8px; color: var(--brand-text-muted, #647773); }
+.bio-points { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 6px; text-align: left; font-size: 13px; }
+.bio-points li { display: flex; gap: 8px; align-items: center; } .bio-points svg { color: #287E65; flex: none; }
+.bio-sheet .wide { width: 100%; justify-content: center; }
+.bio-settings-row { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; }
+.bio-settings-row small { display: block; color: var(--brand-text-muted, #647773); margin-top: 2px; }
+.bio-settings-icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: #0C5051; color: #92FD6F; }
+.bio-settings { margin-bottom: 16px; }

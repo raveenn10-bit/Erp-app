@@ -2,17 +2,30 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { biometricStatus, type BiometricStatus } from '@/lib/biometric';
+import { BiometricEnrollSheet, BiometricLoginPanel, shouldOfferBiometric } from '@/components/biometric-login';
 import { ArrowRight, ShieldCheck, ChartNoAxesCombined, KeyRound, Sparkles, Delete, Check } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 
 export default function Login() {
   const [mode, setMode] = useState<'password' | 'passcode'>('passcode');
-  const [username, setUsername] = useState('Admin');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [passcode, setPasscode] = useState(['', '', '', '']);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const router = useRouter();
+  const [bio, setBio] = useState<BiometricStatus | null>(null);
+  const [showBio, setShowBio] = useState(false);
+  const [offer, setOffer] = useState<{ id: string; name: string } | null>(null);
+  useEffect(() => {
+    biometricStatus().then((st) => { setBio(st); setShowBio(st.enabled); });
+  }, []);
+  // After PIN/password login: offer biometric enrolment once, then open the dashboard.
+  async function afterLogin() {
+    const user = await shouldOfferBiometric();
+    if (user) setOffer(user); else router.push('/dashboard');
+  }
   const reduced = useReducedMotion();
   const pinInputRefs = [
     useRef<HTMLInputElement>(null),
@@ -38,7 +51,7 @@ export default function Login() {
         method: 'POST',
         body: JSON.stringify({ username: username.trim(), password }),
       });
-      router.push('/dashboard');
+      await afterLogin();
     } catch (err) {
       setError((err as Error).message || 'Invalid username or password.');
     } finally {
@@ -62,7 +75,7 @@ export default function Login() {
           passcode: code,
         }),
       });
-      router.push('/dashboard');
+      await afterLogin();
     } catch (err) {
       setError((err as Error).message || 'Invalid passcode.');
       setPasscode(['', '', '', '']);
@@ -109,16 +122,6 @@ export default function Login() {
       nextPin[idx] = '';
       setPasscode(nextPin);
       pinInputRefs[idx].current?.focus();
-    }
-  }
-
-  function handleQuickAdminFill() {
-    setUsername('Admin');
-    if (mode === 'password') {
-      setPassword('Admin2026');
-    } else {
-      setPasscode(['2', '0', '2', '6']);
-      submitPasscode('2026');
     }
   }
 
@@ -185,6 +188,14 @@ export default function Login() {
             </span>
           </p>
 
+          {showBio && bio ? (
+            <BiometricLoginPanel status={bio} onSuccess={() => router.push('/dashboard')} onUseFallback={() => setShowBio(false)} />
+          ) : (<>
+          {bio?.enabled && (
+            <button type="button" className="bio-switch" onClick={() => setShowBio(true)}>
+              Sign in with fingerprint or face · <span lang="si">ජෛවමිතික</span>
+            </button>
+          )}
           {/* Mode Switch Tabs */}
           <div
             style={{
@@ -248,41 +259,6 @@ export default function Login() {
             </button>
           </div>
 
-          {/* Quick Admin Helper Chip */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              background: 'rgba(12, 80, 81, 0.05)',
-              border: '1px dashed var(--brand-border, #DDEBE5)',
-              borderRadius: 10,
-              padding: '8px 12px',
-              marginBottom: 18,
-              fontSize: 12,
-            }}
-          >
-            <div style={{ color: 'var(--brand-text, #142C2A)' }}>
-              <strong>Admin:</strong> Username <code>Admin</code> | PIN <code>2026</code>
-            </div>
-            <button
-              type="button"
-              onClick={handleQuickAdminFill}
-              style={{
-                background: 'var(--brand-accent, #92FD6F)',
-                color: 'var(--brand-text, #142C2A)',
-                border: 'none',
-                borderRadius: 6,
-                padding: '4px 8px',
-                fontSize: 11,
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Autofill Admin
-            </button>
-          </div>
-
           {mode === 'passcode' ? (
             /* 4-Digit Passcode Mode */
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -294,7 +270,7 @@ export default function Login() {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Admin, or your username"
+                  placeholder="Your username"
                   style={{
                     width: '100%',
                     padding: '10px 14px',
@@ -466,7 +442,7 @@ export default function Login() {
                   autoComplete="username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="e.g. Admin or user@business.com"
+                  placeholder="Your username or email"
                   required
                 />
               </label>
@@ -477,7 +453,7 @@ export default function Login() {
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="e.g. Admin2026"
+                  placeholder="Your password"
                   required
                 />
               </label>
@@ -503,6 +479,8 @@ export default function Login() {
             </form>
           )}
 
+          </>)}
+          {offer && <BiometricEnrollSheet user={offer} onDone={() => { setOffer(null); router.push('/dashboard'); }} />}
           <small style={{ marginTop: 24 }}>Developed by Harsh Apex Digital Solutions</small>
         </motion.div>
       </section>

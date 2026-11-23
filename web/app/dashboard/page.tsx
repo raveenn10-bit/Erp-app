@@ -54,6 +54,8 @@ import {
 } from "lucide-react";
 import { api, idempotency, money } from "@/lib/api";
 import { InvoiceActions } from "@/components/invoice-actions";
+import { BiometricSettings } from "@/components/biometric-login";
+import { disableBiometric } from "@/lib/biometric";
 import { ReportsPanel } from "@/components/reports-panel";
 import {
   NotificationBellAndDrawer,
@@ -299,7 +301,10 @@ function Workspace() {
   ];
   const inBottom = bottomItems.some((b) => b.name === tab);
   async function signOut() {
-    await api("/logout", { method: "POST" });
+    // Sign out revokes the server session, so the biometric credential
+    // protecting it is useless: remove it from this phone as well.
+    await disableBiometric();
+    await api("/logout", { method: "POST" }).catch(() => {});
     router.replace("/login");
   }
   return (
@@ -802,6 +807,7 @@ function Workspace() {
               </FormPanel>
               <CreditAlertSettingsPanel />
               <div style={{ marginTop: 20 }}>
+                <BiometricSettings />
                 <ChangePasswordPanel />
               </div>
             </>
@@ -825,6 +831,7 @@ function Workspace() {
                 </button>
               </div>
               <div style={{ marginTop: 20 }}>
+                <BiometricSettings />
                 <ChangePasswordPanel />
               </div>
             </>
