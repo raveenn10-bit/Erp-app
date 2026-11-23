@@ -25,9 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      # Public HTTPS address of the existing ERP Worker (not a secret).
-      # Set it in Settings → Secrets and variables → Actions → Variables.
-      NEXT_PUBLIC_API_URL: ${{ vars.ERP_API_URL }}
+      # Public HTTPS address of the existing production ERP Worker (not a secret).
+      NEXT_PUBLIC_API_URL: https://sanjeewa-distribution-erp.charshan59.workers.dev
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
