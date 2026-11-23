@@ -3,7 +3,7 @@ import { KeyboardResize } from '@capacitor/keyboard';
 
 const config: CapacitorConfig = {
   appId: 'lk.com.harshapex.sanjeewaerp',
-  appName: 'Sanjeewa Distribution ERP',
+  appName: 'Nugathalawa ERP',
   webDir: 'out',
   android: {
     // Never allow cleartext HTTP or debugging of the WebView in release builds.
