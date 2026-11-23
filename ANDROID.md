@@ -23,6 +23,12 @@ Android app (bundled Next.js UI, web/out)  ──native HTTPS──▶  existing
 
 ## Download and install the APK
 
+**Direct link (opens the download straight away on the phone, no GitHub login):**
+https://github.com/raveenn10-bit/Erp-app/releases/latest/download/Nugathalawa-ERP.apk
+
+This always points to the newest build. Every push publishes a release `android-v1.0.<run>`; only the 5 newest are kept.
+
+Alternative (GitHub login needed):
 1. GitHub → **Actions** → latest green **Android APK** run → **Artifacts** → `Sanjeewa-ERP-Android` (downloads a .zip).
 2. Unzip; copy the `.apk` to the phone (WhatsApp to yourself, Google Drive or USB).
 3. On the phone, tap the APK. When Android asks, allow **Install unknown apps** for the app you opened it with (Files / Chrome / Drive). Then tap **Install**.

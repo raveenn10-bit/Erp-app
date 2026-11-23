@@ -126,3 +126,37 @@ jobs:
           path: dist-release/*.apk
           if-no-files-found: error
           retention-days: 90
+
+  # Publishes every pushed build as a GitHub Release so the phone can download
+  # the APK directly from one fixed link (no GitHub login, no zip):
+  #   https://github.com/raveenn10-bit/Erp-app/releases/latest/download/Nugathalawa-ERP.apk
+  publish:
+    needs: build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: android-v1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Sanjeewa-ERP-Android
+          path: dist
+
+      - name: Create release with fixed APK name
+        run: |
+          cp dist/*.apk Nugathalawa-ERP.apk
+          gh release create "$TAG" Nugathalawa-ERP.apk \
+            --target "$GITHUB_SHA" \
+            --title "Nugathalawa ERP 1.0.${{ github.run_number }}" \
+            --notes "Android test build from \`${GITHUB_REF_NAME}\` @ ${GITHUB_SHA::7}. Direct download: https://github.com/${GH_REPO}/releases/latest/download/Nugathalawa-ERP.apk" \
+            --latest
+
+      - name: Keep only the 5 newest app releases
+        run: |
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("android-v"))] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+          while read -r old; do gh release delete "$old" --yes --cleanup-tag; done
