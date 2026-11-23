@@ -54,7 +54,9 @@ jobs:
         run: npm test
 
       - name: Offline sync policy tests
-        run: node --experimental-strip-types --no-warnings scripts/offline-policy.test.mjs
+        run: |
+          node --experimental-strip-types --no-warnings scripts/offline-policy.test.mjs
+          node --experimental-strip-types --no-warnings scripts/free-issue.test.mjs
 
       - name: Build Android web bundle
         run: |
