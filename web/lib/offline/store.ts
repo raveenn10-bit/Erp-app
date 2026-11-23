@@ -30,7 +30,17 @@ export const getSyncState = () => state;
 export function subscribeSync(fn: (s: SyncState) => void) { listeners.add(fn); fn(state); return () => { listeners.delete(fn); }; }
 function patch(p: Partial<SyncState>) { state = { ...state, ...p }; listeners.forEach(f => f(state)); }
 
-export function setOnline(online: boolean) { patch({ online }); if (online) void syncNow(); }
+export function setOnline(online: boolean) {
+  const back = online && !state.online;
+  patch({ online, ...(online ? {} : { reachable: false }) });
+  if (online) {
+    void syncNow(back);
+    if (back) {
+      setTimeout(() => void syncNow(true), 3000); // mobile data often needs a moment after reconnect
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('erp-synced', { detail: { synced: 0 } })); // reload screens with live data
+    }
+  }
+}
 
 async function refreshCounts() {
   const r = await (await db()).query(`SELECT status, COUNT(*) AS n FROM outbox WHERE status IN ('Pending','Syncing','Conflict','Failed') GROUP BY status`);
@@ -82,7 +92,7 @@ export async function enqueue(method: string, path: string, bodyText: string): P
     VALUES(?,?,?,?,?,?,?,?,?,?,?,'Pending',0,0,?)`,
     [crypto.randomUUID(), await deviceId(), user, kind, body.idempotencyKey, method, path, bodyText, body.idempotencyKey, summary, now, now], true);
   await refreshCounts();
-  setTimeout(() => void syncNow(), 1500);
+  setTimeout(() => void syncNow(true), 300); // try immediately (the server may only be briefly unreachable)
   return new OfflineQueuedError(kind);
 }
 
@@ -130,6 +140,7 @@ async function runSync(force: boolean) {
     const due = await (await db()).query(
       `SELECT * FROM outbox WHERE status IN ('Pending','Syncing') AND user_id=? AND (next_attempt_at<=? OR ?=1) ORDER BY created_at ASC LIMIT 50`,
       [userId, now, force ? 1 : 0]);
+    let synced = 0;
     for (const row of (due.values || []) as OutboxRow[]) {
       await mark(row.id, { status: 'Syncing' });
       let status: number | null = null, data: unknown = null;
@@ -137,7 +148,7 @@ async function runSync(force: boolean) {
       catch (e) { if (!(e instanceof NetworkError)) throw e; }
       const outcome = classify(status);
       const err = (data as { error?: string } | null)?.error || (status ? `HTTP ${status}` : 'No connection');
-      if (outcome === 'synced') await mark(row.id, { status: 'Synced', server_ref: serverRef(data), last_error: null });
+      if (outcome === 'synced') { await mark(row.id, { status: 'Synced', server_ref: serverRef(data), last_error: null }); synced++; }
       else if (outcome === 'conflict') await mark(row.id, { status: 'Conflict', last_error: err });
       else if (outcome === 'auth') { await mark(row.id, { status: 'Pending' }); patch({ needsLogin: true }); break; }
       else if (outcome === 'network') { await mark(row.id, { status: 'Pending', next_attempt_at: Date.now() + backoffMs(row.retry_count) }); patch({ reachable: false }); break; }
@@ -147,6 +158,8 @@ async function runSync(force: boolean) {
       }
     }
     await setMeta('last_sync_at', String(Date.now()));
+    // Tell open screens to reload so server numbers/stock replace PENDING items at once.
+    if (synced && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('erp-synced', { detail: { synced } }));
   } catch (e) {
     patch({ lastError: (e as Error).message });
   } finally {
@@ -166,6 +179,6 @@ export async function startSyncEngine() {
   patch({ online: (await Network.getStatus()).connected });
   Network.addListener('networkStatusChange', s => setOnline(s.connected));
   App.addListener('appStateChange', s => { if (s.isActive) void syncNow(); });
-  setInterval(() => { if (state.pending > 0) void syncNow(); }, 60_000);
+  setInterval(() => { if (state.pending > 0 && state.online) void syncNow(); }, 15_000);
   void syncNow();
 }

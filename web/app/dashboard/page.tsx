@@ -156,6 +156,8 @@ const siLabel = (name: string) => menu.find((m) => m.name === name)?.si || "";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 20000 } },
 });
+// Offline sync finished uploading: refresh every screen so PENDING items show their server numbers.
+if (typeof window !== "undefined") window.addEventListener("erp-synced", () => { queryClient.invalidateQueries(); });
 export default function Dashboard() {
   return (
     <QueryClientProvider client={queryClient}>

@@ -31,8 +31,8 @@ export function classify(status: number | null): Outcome {
 }
 
 export const MAX_RETRIES = 8;
-/** Bounded exponential backoff: 5s, 10s, 20s … capped at 30 min. */
-export function backoffMs(retry: number): number { return Math.min(5000 * 2 ** Math.max(0, retry), 30 * 60 * 1000); }
+/** Bounded exponential backoff: 2s, 4s, 8s … capped at 5 min. */
+export function backoffMs(retry: number): number { return Math.min(2000 * 2 ** Math.max(0, retry), 5 * 60 * 1000); }
 
 /** Offline cached data may be used only this long after the last successful server contact. */
 export const OFFLINE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;

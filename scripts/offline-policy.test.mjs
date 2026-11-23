@@ -15,6 +15,6 @@ assert.equal(p.classify(200), 'synced'); assert.equal(p.classify(null), 'network
 assert.equal(p.classify(400), 'conflict'); assert.equal(p.classify(409), 'conflict'); assert.equal(p.classify(403), 'conflict');
 assert.equal(p.classify(401), 'auth'); assert.equal(p.classify(503), 'retry'); assert.equal(p.classify(429), 'retry');
 // bounded backoff
-assert.equal(p.backoffMs(0), 5000); assert.equal(p.backoffMs(3), 40000); assert.equal(p.backoffMs(50), 30 * 60 * 1000);
+assert.equal(p.backoffMs(0), 2000); assert.equal(p.backoffMs(3), 16000); assert.equal(p.backoffMs(50), 5 * 60 * 1000);
 assert.equal(p.serverRef({ number: 'INV-1', id: 'x' }), 'INV-1'); assert.equal(p.serverRef({ reference_number: 'TR-2' }), 'TR-2');
 console.log('offline policy: all tests passed');
