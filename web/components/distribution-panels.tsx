@@ -10,6 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, formatWhatsApp, idempotency, money, normalizeWhatsApp } from "@/lib/api";
+import { printDocumentSheet, publicOrigin, savePdfDoc } from "@/lib/native";
 
 export type Product = {
   variant_id: string;
@@ -475,7 +476,7 @@ export function BillingPanel({
       const totalStr = money(result.totalCents);
       const paidStr = money(result.paidCents);
       const balanceStr = money(Math.max(0, result.totalCents - result.paidCents));
-      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const origin = publicOrigin();
       const invoiceLink = result.shareToken
         ? `${origin}/view/invoice/${result.shareToken}`
         : `${origin}/dashboard`;
@@ -545,7 +546,7 @@ export function BillingPanel({
     y += 5;
     pdf.setFont("helvetica", "bold");
     pdf.text(`Grand Total: ${(totals.total / 100).toFixed(2)}`, 195, y, { align: "right" });
-    pdf.save(`DRAFT-INVOICE-${invoiceDate}.pdf`);
+    await savePdfDoc(pdf, `DRAFT-INVOICE-${invoiceDate}.pdf`);
   }
 
   function loadDraft(d: any) {
@@ -1396,7 +1397,7 @@ async function pdfDocument(data: any, title: string, thermal = false) {
   y += 14;
   pdf.line(thermal ? 5 : 15, y, thermal ? 70 : 75, y);
   if (!thermal) pdf.line(130, y, 195, y);
-  pdf.save(`${data.record.reference_number}-${thermal ? "80mm" : "A4"}.pdf`);
+  await savePdfDoc(pdf, `${data.record.reference_number}-${thermal ? "80mm" : "A4"}.pdf`);
 }
 function shareDoc(data: any, title: string) {
   const phone = String(
@@ -1424,7 +1425,7 @@ function DocumentActions({ data, title }: { data: any; title: string }) {
         <Printer size={16} />
         80mm
       </button>
-      <button className="secondary" onClick={() => window.print()}>
+      <button className="secondary" onClick={(e) => printDocumentSheet(e.currentTarget, title)}>
         <Printer size={16} />
         Print
       </button>

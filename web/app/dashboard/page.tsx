@@ -169,6 +169,15 @@ function Workspace() {
   useEffect(() => {
     if (me.isError) router.replace("/login");
   }, [me.isError, router]);
+  // Android back button: close the drawer first, then return to Overview.
+  useEffect(() => {
+    const onBack = (e: Event) => {
+      if (open) { setOpen(false); e.preventDefault(); }
+      else if (tab !== "Overview") { setTab("Overview"); e.preventDefault(); }
+    };
+    window.addEventListener("erp-back", onBack);
+    return () => window.removeEventListener("erp-back", onBack);
+  }, [open, tab]);
   const user = me.data?.user;
   const summary = useQuery({
     queryKey: ["dashboard"],

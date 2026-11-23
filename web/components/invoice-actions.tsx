@@ -1,481 +1,180 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Download, MessageCircle, Printer, ReceiptText, X } from "lucide-react";
-import { api, formatWhatsApp, money, normalizeWhatsApp } from "@/lib/api";
+import { Bluetooth, Download, MessageCircle, Printer, ReceiptText, RefreshCw, Settings2, Share2, X } from "lucide-react";
+import { api, formatWhatsApp, normalizeWhatsApp } from "@/lib/api";
+import { isNative, openExternal, printPdf, publicOrigin, saveFile, shareFile, type PrinterDevice } from "@/lib/native";
+import { pdfFileName, toInvoiceModel, whatsappMessage, type InvoiceDetail } from "@/lib/invoice/model";
+import { InvoiceA4, A4_PX } from "@/components/invoice-document";
+import { DEFAULT_PRINTER, listPairedPrinters, loadPrinter, paperSpec, printReceipt, savePrinter, testReceiptModel, type PrinterSettings } from "@/lib/invoice/printer";
 
-type Detail = {
-  invoice: {
-    id: string;
-    number: string;
-    created_at: string;
-    shop_name: string;
-    address: string;
-    whatsapp: string;
-    customer_whatsapp?: string;
-    share_token?: string;
-    business_name: string;
-    business_address: string;
-    business_phone: string;
-    business_whatsapp?: string;
-    business_email?: string;
-    subtotal_cents: number;
-    item_discount_cents: number;
-    invoice_discount_cents: number;
-    total_cents: number;
-    paid_cents: number;
-    due_at: string | null;
-    payment_method: string;
-    payment_terms: string;
-    notes: string;
-    terms: string;
-    status: string;
-  };
-  items: Array<{
-    id: string;
-    name: string;
-    label: string;
-    quantity: number;
-    unit_price_cents: number;
-    shop_price_cents: number;
-    item_discount_cents: number;
-    line_cents: number;
-    price_type: string;
-  }>;
-};
+/** Scales the fixed-size A4 pages down to the available width (no overflow on phones). */
+function ScaledPreview({ children }: { children: React.ReactNode }) {
+  const outer = useRef<HTMLDivElement>(null), inner = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1), [height, setHeight] = useState<number>();
+  useLayoutEffect(() => {
+    const fit = () => {
+      if (!outer.current || !inner.current) return;
+      const s = Math.min(1, outer.current.clientWidth / A4_PX.width);
+      setScale(s); setHeight(inner.current.scrollHeight * s);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    if (outer.current) ro.observe(outer.current);
+    return () => ro.disconnect();
+  }, [children]);
+  return (
+    <div className="inv-preview" ref={outer} style={{ height }}>
+      <div ref={inner} style={{ width: A4_PX.width, transform: `scale(${scale})`, transformOrigin: "top left" }}>{children}</div>
+    </div>
+  );
+}
 
-export function InvoiceActions({
-  id,
-  close,
-}: {
-  id: string;
-  close: () => void;
-}) {
-  const detail = useQuery({
-    queryKey: ["invoice", id],
-    queryFn: () => api<Detail>(`/invoices/${id}`),
-  });
-  const settings = useQuery({
-    queryKey: ["billing-settings"],
-    queryFn: () => api<Record<string, string>>("/billing/settings"),
-  });
-  const data = detail.data,
-    showShop = settings.data?.invoice_show_shop_price === "true",
-    showCustomerWhatsapp = settings.data?.invoice_show_customer_whatsapp !== "false";
+export function InvoiceActions({ id, close }: { id: string; close: () => void }) {
+  const detail = useQuery({ queryKey: ["invoice", id], queryFn: () => api<InvoiceDetail>(`/invoices/${id}`) });
+  const settings = useQuery({ queryKey: ["billing-settings"], queryFn: () => api<Record<string, string>>("/billing/settings") });
+  const data = detail.data;
+  const model = useMemo(() => (data ? toInvoiceModel(data, settings.data) : null), [data, settings.data]);
 
   const [waInput, setWaInput] = useState("");
   const [isUpdatingWa, setIsUpdatingWa] = useState(false);
-  const [waMsg, setWaMsg] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [printer, setPrinter] = useState<PrinterSettings>(DEFAULT_PRINTER);
+  const [showPrinter, setShowPrinter] = useState(false);
+  const [devices, setDevices] = useState<PrinterDevice[] | null>(null);
+  const pdfCache = useRef<{ key: string; blob: Blob } | null>(null);
 
+  useEffect(() => { loadPrinter().then(setPrinter); }, []);
   useEffect(() => {
-    if (data?.invoice) {
-      setWaInput(data.invoice.customer_whatsapp || data.invoice.whatsapp || "");
-    }
+    if (data?.invoice) setWaInput(data.invoice.customer_whatsapp || data.invoice.whatsapp || "");
   }, [data?.invoice]);
+
+  const note = (text: string, ok = true) => setMsg({ text, ok });
+  async function run(label: string, fn: () => Promise<string | void>) {
+    setBusy(label); setMsg(null);
+    try { const r = await fn(); if (r) note(r); }
+    catch (e) { const t = (e as Error).message || "Something went wrong"; if (!/cancel/i.test(t)) note(t, false); }
+    finally { setBusy(null); }
+  }
+  async function pdf(): Promise<Blob> {
+    if (!model) throw new Error("Invoice not loaded");
+    const key = JSON.stringify(model);
+    if (pdfCache.current?.key === key) return pdfCache.current.blob;
+    const { buildA4Pdf } = await import("@/lib/invoice/render");
+    const blob = await buildA4Pdf(model);
+    pdfCache.current = { key, blob };
+    return blob;
+  }
+  const shareLink = () => (model?.shareToken ? `${publicOrigin()}/view/invoice/${model.shareToken}` : undefined);
 
   async function updateWhatsappNumber() {
     if (!data) return;
-    const normalized = normalizeWhatsApp(waInput);
-    if (!normalized) {
-      setWaMsg("Please enter a valid WhatsApp number.");
-      return;
-    }
-    setIsUpdatingWa(true);
-    setWaMsg("");
+    if (!normalizeWhatsApp(waInput)) { note("Please enter a valid WhatsApp number.", false); return; }
+    setIsUpdatingWa(true); setMsg(null);
     try {
-      await api<{ ok: boolean; whatsapp: string }>(`/invoices/${data.invoice.id}/whatsapp`, {
-        method: "PATCH",
-        body: JSON.stringify({ whatsapp: waInput }),
-      });
-      setWaMsg("WhatsApp recipient updated successfully.");
+      await api<{ ok: boolean; whatsapp: string }>(`/invoices/${data.invoice.id}/whatsapp`, { method: "PATCH", body: JSON.stringify({ whatsapp: waInput }) });
+      note("WhatsApp recipient updated.");
       await detail.refetch();
-    } catch (err) {
-      setWaMsg((err as Error).message);
-    } finally {
-      setIsUpdatingWa(false);
-    }
+    } catch (err) { note((err as Error).message, false); }
+    finally { setIsUpdatingWa(false); }
   }
 
-  async function download(thermal = false) {
-    if (!data) return;
-    const { jsPDF } = await import("jspdf");
-    const pdf = new jsPDF({ unit: "mm", format: thermal ? [80, 220] : "a4" }),
-      i = data.invoice,
-      pageWidth = thermal ? 80 : 210,
-      left = thermal ? 5 : 15,
-      right = thermal ? 75 : 195;
-    let y = thermal ? 9 : 15;
-    pdf.setTextColor(0);
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(thermal ? 11 : 16);
-    pdf.text(i.business_name, pageWidth / 2, y, { align: "center" });
-    y += thermal ? 5 : 6;
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(thermal ? 7 : 9);
-    for (const text of [
-      i.business_address,
-      [i.business_phone, i.business_whatsapp, i.business_email]
-        .filter(Boolean)
-        .join(" · "),
-    ]) {
-      for (const line of pdf.splitTextToSize(text || "", right - left)) {
-        pdf.text(line, pageWidth / 2, y, { align: "center" });
-        y += 4;
-      }
-    }
-    pdf.line(left, y, right, y);
-    y += 7;
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(thermal ? 10 : 14);
-    pdf.text(thermal ? "SALES RECEIPT" : "SALES INVOICE", pageWidth / 2, y, {
-      align: "center",
-    });
-    y += 7;
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(thermal ? 8 : 9);
-    const activeWhatsapp = i.customer_whatsapp || i.whatsapp;
-    for (const text of [
-      `Invoice: ${i.number}`,
-      `Date: ${i.created_at.slice(0, 10)}`,
-      `Customer: ${i.shop_name}`,
-      showCustomerWhatsapp && activeWhatsapp ? `WhatsApp: ${formatWhatsApp(activeWhatsapp)}` : "",
-      i.address ? `Address: ${i.address}` : "",
-      `Payment: ${i.payment_method}`,
-    ].filter(Boolean)) {
-      for (const line of pdf.splitTextToSize(text, right - left)) {
-        pdf.text(line, left, y);
-        y += 4;
-      }
-    }
-    y += 2;
-    pdf.line(left, y, right, y);
-    y += 5;
-    for (const item of data.items) {
-      pdf.setFont("helvetica", "bold");
-      for (const line of pdf.splitTextToSize(
-        `${item.name} · ${item.label}`,
-        thermal ? 48 : 80,
-      )) {
-        pdf.text(line, left, y);
-        y += 4;
-      }
-      pdf.setFont("helvetica", "normal");
-      pdf.text(
-        `${item.quantity} × ${(item.unit_price_cents / 100).toFixed(2)}  ${(item.line_cents / 100).toFixed(2)}`,
-        right,
-        y,
-        { align: "right" },
-      );
-      if (showShop && item.shop_price_cents)
-        pdf.text(
-          `Shop price: ${(item.shop_price_cents / 100).toFixed(2)}`,
-          left,
-          y,
-        );
-      y += 5;
-      if (item.item_discount_cents) {
-        pdf.text(
-          `Item discount: -${(item.item_discount_cents / 100).toFixed(2)}`,
-          right,
-          y,
-          { align: "right" },
-        );
-        y += 4;
-      }
-      if (y > (thermal ? 190 : 255)) {
-        pdf.addPage();
-        y = 15;
-      }
-    }
-    pdf.line(left, y, right, y);
-    y += 6;
-    const totals: [
-      [string, number],
-      [string, number],
-      [string, number],
-      [string, number],
-      [string, number],
-      [string, number],
-    ] = [
-      ["Subtotal", i.subtotal_cents],
-      ["Item discounts", -i.item_discount_cents],
-      ["Invoice discount", -i.invoice_discount_cents],
-      ["Grand total", i.total_cents],
-      ["Paid", i.paid_cents],
-      ["Outstanding", i.total_cents - i.paid_cents],
-    ];
-    for (const [label, value] of totals) {
-      if (label === "Grand total") pdf.setFont("helvetica", "bold");
-      pdf.text(label, left, y);
-      pdf.text((value / 100).toFixed(2), right, y, { align: "right" });
-      pdf.setFont("helvetica", "normal");
-      y += 5;
-    }
-    if (i.due_at) {
-      pdf.text(`Due date: ${i.due_at}`, left, y);
-      y += 5;
-    }
-    if (!thermal) {
-      y = Math.max(y + 15, 235);
-      pdf.line(15, y, 80, y);
-      pdf.line(130, y, 195, y);
-      pdf.text("Issued By / Authorized Signature", 15, y + 5);
-      pdf.text("Received By / Customer Signature", 130, y + 5);
-      y += 16;
-      if (i.terms) {
-        pdf.setFontSize(8);
-        pdf.text(pdf.splitTextToSize(`Terms: ${i.terms}`, 180), 15, y);
-      }
-    } else {
-      y += 12;
-      pdf.line(5, y, 34, y);
-      pdf.line(46, y, 75, y);
-      pdf.setFontSize(6);
-      pdf.text("Issued By", 19.5, y + 4, { align: "center" });
-      pdf.text("Received By", 60.5, y + 4, { align: "center" });
-    }
-    pdf.save(`${i.number}-${thermal ? "80mm" : "A4"}.pdf`);
+  // Send the real PDF through the Android share sheet. The user picks WhatsApp
+  // and the recipient; Android cannot pre-select a WhatsApp contact for files.
+  const sendPdf = () => run("share", async () => {
+    if (!model) return;
+    const phone = formatWhatsApp(waInput || model.customer.whatsapp);
+    const text = whatsappMessage(model, shareLink());
+    const how = await shareFile(await pdf(), pdfFileName(model, "A4"), { title: `Invoice ${model.number}`, text });
+    if (how === "downloaded") return "PDF downloaded — attach it in WhatsApp.";
+    return phone ? `Choose WhatsApp, then send to ${model.customer.name} (${phone}). Not marked as delivered.` : "Share sheet opened.";
+  });
+  // Text + link straight into the customer's chat (recipient pre-filled, no attachment).
+  function openChat() {
+    if (!model) return;
+    const phone = normalizeWhatsApp(waInput || model.customer.whatsapp);
+    if (!phone) { note("Please enter a valid WhatsApp number first.", false); return; }
+    openExternal(`https://wa.me/${phone}?text=${encodeURIComponent(whatsappMessage(model, shareLink()))}`);
   }
 
-  function share() {
-    if (!data) return;
-    const i = data.invoice,
-      phone = normalizeWhatsApp(waInput || i.customer_whatsapp || i.whatsapp || "");
-    if (!phone) {
-      setWaMsg("Please enter a valid WhatsApp number before sharing.");
-      return;
-    }
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const invoiceLink = i.share_token
-      ? `${origin}/view/invoice/${i.share_token}`
-      : `${origin}/dashboard`;
-    const totalStr = money(i.total_cents);
-    const paidStr = money(i.paid_cents);
-    const balanceStr = money(Math.max(0, i.total_cents - i.paid_cents));
-
-    const message = `Hello,\n\nYour invoice from ${i.business_name || "Nugathalawa Ceylon Tea Export (Pvt) Ltd"} is ready.\n\nInvoice No: ${i.number}\nShop: ${i.shop_name}\nTotal: ${totalStr}\nPaid: ${paidStr}\nBalance: ${balanceStr}\n\nView / Download Invoice:\n${invoiceLink}\n\nThank you!`;
-
-    window.open(
-      `https://wa.me/${phone}?text=${encodeURIComponent(message)}`,
-      "_blank",
-      "noopener,noreferrer",
-    );
+  async function choosePrinterList() {
+    await run("devices", async () => { setDevices(await listPairedPrinters()); });
   }
+  async function updatePrinter(next: PrinterSettings) { setPrinter(next); await savePrinter(next); }
 
+  const native = isNative();
   return (
     <div className="dialog-backdrop" onMouseDown={close}>
-      <div
-        className="dialog-card document-sheet invoice-sheet"
-        role="dialog"
-        aria-modal="true"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <button className="secondary document-close" onClick={close}>
-          <X size={16} />
-          Close
-        </button>
+      <div className="dialog-card document-sheet invoice-sheet" role="dialog" aria-modal="true" aria-label="Invoice" onMouseDown={(e) => e.stopPropagation()}>
+        <button className="secondary document-close" onClick={close}><X size={16} />Close</button>
         {detail.isLoading ? (
-          <div className="loader" />
+          <div className="inv-skeleton" aria-busy="true"><div /><div /><div /><div /></div>
         ) : detail.isError ? (
-          <div className="error">Could not load invoice.</div>
-        ) : (
-          data && (
-            <>
-              <header className="invoice-doc-head">
-                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 8}}>
-                  <img src="/nugathalawa-logo.jpg" alt="Logo" style={{width: 44, height: 44, borderRadius: '50%', objectFit: 'cover'}} />
-                  <h2 style={{margin: 0}}>{data.invoice.business_name}</h2>
-                </div>
-                <p>{data.invoice.business_address}</p>
-                <p>
-                  {[
-                    data.invoice.business_phone,
-                    data.invoice.business_whatsapp,
-                    data.invoice.business_email,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-                <strong>SALES INVOICE</strong>
-              </header>
-              <div className="invoice-meta">
-                <div>
-                  <b>Invoice</b>
-                  <span>{data.invoice.number}</span>
-                  <b>Date</b>
-                  <span>{data.invoice.created_at.slice(0, 10)}</span>
-                </div>
-                <div>
-                  <b>Bill to</b>
-                  <span>{data.invoice.shop_name}</span>
-                  <span>{data.invoice.address}</span>
-                  <span>
-                    WhatsApp: {formatWhatsApp(data.invoice.customer_whatsapp || data.invoice.whatsapp || "Not configured")}
-                  </span>
-                  <span>Payment: {data.invoice.payment_method}</span>
-                </div>
-              </div>
+          <div className="error">Could not load invoice. <button className="secondary" onClick={() => detail.refetch()}><RefreshCw size={14} />Retry</button></div>
+        ) : model && (
+          <>
+            <div className="inv-actions" role="toolbar" aria-label="Invoice actions">
+              <button className="primary wa" disabled={!!busy} onClick={sendPdf}><MessageCircle size={16} />{busy === "share" ? "Preparing PDF…" : "Send PDF via WhatsApp"}</button>
+              <button className="secondary" disabled={!!busy} onClick={() => run("save", async () => saveFile(await pdf(), pdfFileName(model, "A4")))}><Download size={16} />{busy === "save" ? "Saving…" : "Download PDF"}</button>
+              <button className="secondary" disabled={!!busy} onClick={() => run("print", async () => { await printPdf(await pdf(), pdfFileName(model, "A4"), true); })}><Printer size={16} />{busy === "print" ? "Preparing…" : "Print A4"}</button>
+              <button className="secondary" disabled={!!busy} onClick={() => run("receipt", () => printReceipt(model, printer))}><ReceiptText size={16} />{busy === "receipt" ? "Printing…" : `Receipt ${paperSpec(printer).mm}mm`}</button>
+              <button className="secondary" disabled={!!busy} onClick={() => run("other", async () => { await shareFile(await pdf(), pdfFileName(model, "A4"), { title: `Invoice ${model.number}` }); })}><Share2 size={16} />Share…</button>
+              <button className="secondary icon-only" aria-label="Printer settings" aria-expanded={showPrinter} onClick={() => setShowPrinter(v => !v)}><Settings2 size={16} /></button>
+            </div>
+            {msg && <p className={`inv-msg ${msg.ok ? "ok" : "bad"}`} role="status">{msg.text}</p>}
 
-              {/* Dedicated WhatsApp Editing & Resend Section */}
-              <div
-                style={{
-                  background: "var(--success-soft)",
-                  border: "1px solid var(--success-line)",
-                  borderRadius: "8px",
-                  padding: "12px 16px",
-                  margin: "12px 0 16px",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                  <MessageCircle size={18} style={{ color: "var(--success)" }} />
-                  <b style={{ fontSize: "13px", color: "var(--success-strong)" }}>WhatsApp Recipient:</b>
-                  <input
-                    type="tel"
-                    value={waInput}
-                    onChange={(e) => setWaInput(e.target.value)}
-                    placeholder="e.g. 077 123 4567"
-                    style={{
-                      padding: "6px 10px",
-                      fontSize: "13px",
-                      borderRadius: "6px",
-                      border: "1px solid var(--success-line)",
-                      width: "180px",
-                    }}
-                  />
-                  <button
-                    className="secondary"
-                    type="button"
-                    disabled={isUpdatingWa}
-                    onClick={updateWhatsappNumber}
-                    style={{ fontSize: "12px", padding: "6px 12px" }}
-                  >
-                    {isUpdatingWa ? "Saving..." : "Update Number"}
-                  </button>
-                  <button
-                    className="primary"
-                    type="button"
-                    onClick={share}
-                    style={{
-                      background: "var(--success)",
-                      color: "#fff",
-                      fontSize: "12px",
-                      padding: "6px 14px",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "6px",
-                    }}
-                  >
-                    <MessageCircle size={14} />
-                    Resend via WhatsApp
-                  </button>
+            {showPrinter && (
+              <section className="printer-panel" aria-label="Thermal printer settings">
+                <h3><Bluetooth size={16} /> Receipt printer</h3>
+                <div className="seg-row">
+                  {(["bluetooth", "system"] as const).map(mode => (
+                    <button key={mode} className={printer.mode === mode ? "primary" : "secondary"} onClick={() => updatePrinter({ ...printer, mode })} disabled={mode === "bluetooth" && !native}>
+                      {mode === "bluetooth" ? "Bluetooth (ESC/POS)" : "Android print service"}
+                    </button>
+                  ))}
                 </div>
-                {waMsg && (
-                  <p style={{ margin: "6px 0 0", fontSize: "12px", color: waMsg.includes("successfully") ? "var(--success-strong)" : "var(--danger-strong)" }}>
-                    {waMsg}
-                  </p>
+                <div className="seg-row">
+                  {(["58", "80", "custom"] as const).map(paper => (
+                    <button key={paper} className={printer.paper === paper ? "primary" : "secondary"} onClick={() => updatePrinter({ ...printer, paper })}>{paper === "custom" ? "Custom" : `${paper} mm`}</button>
+                  ))}
+                </div>
+                {printer.paper === "custom" && (
+                  <div className="seg-row">
+                    <label>Paper width (mm)<input type="number" inputMode="numeric" min={40} max={112} value={printer.customMm} onChange={e => updatePrinter({ ...printer, customMm: Number(e.target.value) })} /></label>
+                    <label>Printable dots<input type="number" inputMode="numeric" min={200} max={832} step={8} value={printer.customDots} onChange={e => updatePrinter({ ...printer, customDots: Number(e.target.value) })} /></label>
+                  </div>
                 )}
-              </div>
-
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Product</th>
-                      <th>Qty</th>
-                      <th>Price type</th>
-                      <th>Unit</th>
-                      {showShop && <th>Shop price</th>}
-                      <th>Discount</th>
-                      <th>Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.items.map((x) => (
-                      <tr key={x.id}>
-                        <td>
-                          {x.name} · {x.label}
-                        </td>
-                        <td>{x.quantity}</td>
-                        <td>{x.price_type}</td>
-                        <td>{money(x.unit_price_cents)}</td>
-                        {showShop && (
-                          <td>
-                            {x.shop_price_cents
-                              ? money(x.shop_price_cents)
-                              : "—"}
-                          </td>
-                        )}
-                        <td>{money(x.item_discount_cents)}</td>
-                        <td>{money(x.line_cents)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="invoice-doc-totals">
-                <span>Subtotal</span>
-                <b>{money(data.invoice.subtotal_cents)}</b>
-                <span>Total discount</span>
-                <b>
-                  -{" "}
-                  {money(
-                    data.invoice.item_discount_cents +
-                      data.invoice.invoice_discount_cents,
-                  )}
-                </b>
-                <span>Grand total</span>
-                <b>{money(data.invoice.total_cents)}</b>
-                <span>Paid</span>
-                <b>{money(data.invoice.paid_cents)}</b>
-                <span>Outstanding</span>
-                <b>
-                  {money(data.invoice.total_cents - data.invoice.paid_cents)}
-                </b>
-                {data.invoice.due_at && (
+                {printer.mode === "bluetooth" && (
                   <>
-                    <span>Due date</span>
-                    <b>{data.invoice.due_at}</b>
+                    <p className="muted">Pair the printer first in Android Settings → Bluetooth. Status: <b>{printer.device ? `Selected: ${printer.device.name}` : "No printer selected"}</b></p>
+                    <div className="seg-row">
+                      <button className="secondary" disabled={!!busy} onClick={choosePrinterList}><RefreshCw size={14} />{busy === "devices" ? "Loading…" : "Find paired printers"}</button>
+                    </div>
+                    {devices && (devices.length ? (
+                      <ul className="device-list">
+                        {devices.map(d => (
+                          <li key={d.address}><button className={printer.device?.address === d.address ? "primary" : "secondary"} onClick={() => updatePrinter({ ...printer, device: d })}>{d.name}<small>{d.address}</small></button></li>
+                        ))}
+                      </ul>
+                    ) : <p className="muted">No paired devices found.</p>)}
                   </>
                 )}
-              </div>
-              {data.invoice.notes && (
-                <p>
-                  <b>Notes:</b> {data.invoice.notes}
-                </p>
-              )}
-              {data.invoice.terms && (
-                <p className="invoice-terms">
-                  <b>Terms:</b> {data.invoice.terms}
-                </p>
-              )}
-              <div className="signature-grid">
-                <span>Issued By / Authorized Signature</span>
-                <span>Received By / Customer Signature</span>
-              </div>
-              <div className="form-actions">
-                <button className="primary" onClick={() => download(false)}>
-                  <Download size={16} />
-                  A4 PDF
-                </button>
-                <button className="secondary" onClick={() => download(true)}>
-                  <ReceiptText size={16} />
-                  80mm receipt
-                </button>
-                <button className="secondary" onClick={() => window.print()}>
-                  <Printer size={16} />
-                  Print
-                </button>
-                <button
-                  className="secondary"
-                  onClick={share}
-                  style={{ color: "var(--success)", borderColor: "var(--success-line)" }}
-                >
-                  <MessageCircle size={16} />
-                  Send via WhatsApp
-                </button>
-              </div>
-            </>
-          )
+                <button className="secondary" disabled={!!busy} onClick={() => run("test", () => printReceipt(testReceiptModel(), printer))}><Printer size={14} />{busy === "test" ? "Printing…" : "Test print"}</button>
+              </section>
+            )}
+
+            <div className="inv-wa">
+              <MessageCircle size={18} />
+              <label>WhatsApp recipient
+                <input type="tel" inputMode="tel" value={waInput} onChange={(e) => setWaInput(e.target.value)} placeholder="e.g. 077 123 4567" />
+              </label>
+              <button className="secondary" type="button" disabled={isUpdatingWa} onClick={updateWhatsappNumber}>{isUpdatingWa ? "Saving…" : "Update number"}</button>
+              <button className="secondary" type="button" onClick={openChat}>Open chat (text + link)</button>
+            </div>
+
+            <ScaledPreview><InvoiceA4 m={model} /></ScaledPreview>
+          </>
         )}
       </div>
     </div>
