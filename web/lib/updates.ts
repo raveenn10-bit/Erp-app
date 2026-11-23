@@ -4,6 +4,7 @@
 // versionCode (App.getInfo().build) with the newest release.
 import { CapacitorHttp } from '@capacitor/core';
 import { isNative } from './native';
+import { NATIVE_VERSION, getManifest, stageBundle } from './live-update';
 
 const REPO = 'raveenn10-bit/Erp-app';
 export const APK_URL = `https://github.com/${REPO}/releases/latest/download/Nugathalawa-ERP.apk`;
@@ -39,6 +40,17 @@ export async function checkForUpdate(force = false): Promise<UpdateInfo | null> 
   const rel = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
   const code = Number(String(rel.tag_name || '').match(/android-v\d+\.\d+\.(\d+)/)?.[1] || 0);
   if (!code || code <= current) { await pref('update-available', ''); return null; }
+  // Live update path: if the newest build needs no new native code, download its
+  // web bundle silently instead of asking the user to install an APK.
+  const manifestAsset = (rel.assets || []).find((a: { name: string }) => a.name === 'bundle.json');
+  if (manifestAsset) {
+    const m = await getManifest(manifestAsset.browser_download_url);
+    if (m && m.nativeVersion <= NATIVE_VERSION) {
+      await pref('update-available', '');
+      void stageBundle(m);
+      return null;
+    }
+  }
   const asset = (rel.assets || []).find((a: { name: string }) => a.name === 'Nugathalawa-ERP.apk');
   const upd: UpdateInfo = {
     version: `1.0.${code}`, code, current: info.version,

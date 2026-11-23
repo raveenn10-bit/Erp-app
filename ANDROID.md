@@ -86,3 +86,9 @@ npx wrangler dev --port 8787
 cd web && NEXT_PUBLIC_API_URL=http://localhost:8787 npx next build && npx cap sync android
 npx cap open android   # Android Studio, run on a device
 ```
+
+## Live updates (no APK reinstall)
+
+Every build also publishes `bundle.zip` + `bundle.json` (sha256 checksum) on its release. The app checks on start, on return to the foreground and every 10 minutes. If the new build needs **no new native code**, it downloads and verifies the web bundle silently and applies it the next time the app opens (or immediately with **Restart now**). If the bundle crashes on start, the plugin rolls back to the previous one. Nothing is sent to Capgo's cloud (`statsUrl: ''`, self-hosted on GitHub).
+
+**Rule for developers:** whenever native code changes — anything in `web/android/`, Android permissions, or adding/upgrading a Capacitor plugin — increase the number in `web/native-version.txt`. Builds with a higher native version are offered as an APK update instead of a live update, so web code never runs against native code it wasn't built for.

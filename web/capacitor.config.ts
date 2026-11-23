@@ -17,6 +17,9 @@ const config: CapacitorConfig = {
     CapacitorHttp: { enabled: true },
     CapacitorCookies: { enabled: true },
     // Offline database: SQLCipher-encrypted, passphrase kept in Android Keystore-backed storage.
+    // Live updates of the web bundle (self-hosted on GitHub Releases, no Capgo cloud):
+    // the app downloads + verifies the bundle itself; nothing is sent to Capgo.
+    CapacitorUpdater: { autoUpdate: false, statsUrl: '', resetWhenUpdate: true, appReadyTimeout: 15000, keepUrlPathAfterReload: true },
     CapacitorSQLite: { androidIsEncryption: true, androidBiometric: { biometricAuth: false } },
     SplashScreen: {
       launchShowDuration: 1200,

@@ -57,7 +57,26 @@ jobs:
         run: node --experimental-strip-types --no-warnings scripts/offline-policy.test.mjs
 
       - name: Build Android web bundle
-        run: npm run build -w web
+        run: |
+          export NEXT_PUBLIC_BUILD_CODE=${{ github.run_number }}
+          export NEXT_PUBLIC_NATIVE_VERSION=$(tr -dc '0-9' < web/native-version.txt)
+          echo "Build code $NEXT_PUBLIC_BUILD_CODE, native version $NEXT_PUBLIC_NATIVE_VERSION"
+          npm run build -w web
+
+      - name: Package live-update bundle
+        run: |
+          mkdir -p bundle
+          (cd web/out && zip -qr ../../bundle/bundle.zip .)
+          tr -dc '0-9' < web/native-version.txt > bundle/native-version
+          ls -la bundle
+
+      - name: Upload live-update bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-bundle
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 30
 
       - uses: actions/setup-java@v4
         with:
@@ -149,12 +168,30 @@ jobs:
           name: Sanjeewa-ERP-Android
           path: dist
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-bundle
+          path: bundle
+
+      - name: Write live-update manifest
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          SUM=$(sha256sum bundle/bundle.zip | cut -d' ' -f1)
+          NATIVE=$(cat bundle/native-version)
+          NOTE="${COMMIT_MSG%%$'\n'*}"
+          jq -n --argjson code ${{ github.run_number }} --arg version "1.0.${{ github.run_number }}" \
+            --argjson native "$NATIVE" --arg url "https://github.com/${GH_REPO}/releases/download/${TAG}/bundle.zip" \
+            --arg sum "$SUM" --arg notes "$NOTE" \
+            '{code:$code, version:$version, nativeVersion:$native, url:$url, checksum:$sum, notes:$notes}' > bundle/bundle.json
+          cat bundle/bundle.json
+
       - name: Create release with fixed APK name
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           cp dist/*.apk Nugathalawa-ERP.apk
-          gh release create "$TAG" Nugathalawa-ERP.apk \
+          gh release create "$TAG" Nugathalawa-ERP.apk bundle/bundle.zip bundle/bundle.json \
             --target "$GITHUB_SHA" \
             --title "Nugathalawa ERP 1.0.${{ github.run_number }}" \
             --notes "$(printf '%s\n\nAndroid test build from %s @ %s\nDirect download: https://github.com/%s/releases/latest/download/Nugathalawa-ERP.apk' "${COMMIT_MSG%%$'\n'*}" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" "$GH_REPO")" \
