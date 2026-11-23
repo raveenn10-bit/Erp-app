@@ -1,6 +1,6 @@
 'use client';
-import { isNative, ThermalPrinter, printPdf, type PrinterDevice } from '@/lib/native';
-import { buildReceiptPdf, bytesToBase64, canvasToEscPos, renderReceiptCanvas } from './render';
+import { isNative, ThermalPrinter, printPdf, shareFile, type PrinterDevice } from '@/lib/native';
+import { buildReceiptPdf, buildReceiptPng, bytesToBase64, canvasToEscPos, renderReceiptCanvas } from './render';
 import type { InvoiceModel } from './model';
 
 export type PrinterSettings = {
@@ -65,4 +65,11 @@ export function testReceiptModel(): InvoiceModel {
     showShopPrice: false, showCustomerWhatsapp: false,
     subtotal: 0, itemDiscount: 0, invoiceDiscount: 0, total: 0, paid: 0, outstanding: 0,
   };
+}
+
+/** Sends the receipt image to any installed printer app (RawBT, printer vendor apps, …). */
+export async function shareReceiptToPrinterApp(m: InvoiceModel, s: PrinterSettings): Promise<string> {
+  const { dots } = paperSpec(s);
+  const how = await shareFile(await buildReceiptPng(m, dots), `${m.number.replace(/[^A-Za-z0-9-]+/g, '_')}_Receipt.png`, { title: `Receipt ${m.number}` });
+  return how === 'downloaded' ? 'Receipt image downloaded' : 'Choose your printer app (e.g. RawBT)';
 }

@@ -1,6 +1,11 @@
 package lk.com.harshapex.sanjeewaerp;
 
 import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import androidx.core.content.FileProvider;
+import java.util.ArrayList;
+import java.util.List;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.CancellationSignal;
@@ -58,6 +63,48 @@ public class NativePrintPlugin extends Plugin {
                 call.reject("Unable to open Android print: " + e.getMessage());
             }
         });
+    }
+
+    /**
+     * Opens WhatsApp (or WhatsApp Business) with the PDF attached and, where
+     * WhatsApp honours it, the customer's chat pre-selected via the "jid"
+     * extra (unofficial; WhatsApp may still ask the user to pick the chat).
+     * The user always presses Send — nothing is sent automatically.
+     */
+    @PluginMethod
+    public void shareToWhatsApp(PluginCall call) {
+        String path = call.getString("path");
+        String phone = call.getString("phone", "").replaceAll("[^0-9]", "");
+        String text = call.getString("text", "");
+        String mime = call.getString("mime", "application/pdf");
+        if (path == null) { call.reject("path is required"); return; }
+        File file = new File(Uri.parse(path).getPath() != null ? Uri.parse(path).getPath() : path);
+        try {
+            if (!file.getCanonicalPath().startsWith(getContext().getCacheDir().getCanonicalPath())) { call.reject("File outside app cache"); return; }
+        } catch (Exception e) { call.reject("Invalid path"); return; }
+        Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", file);
+        List<Intent> targets = new ArrayList<>();
+        for (String pkg : new String[]{"com.whatsapp.w4b", "com.whatsapp"}) {
+            try {
+                getContext().getPackageManager().getPackageInfo(pkg, 0);
+                Intent i = new Intent(Intent.ACTION_SEND);
+                i.setType(mime);
+                i.setPackage(pkg);
+                i.putExtra(Intent.EXTRA_STREAM, uri);
+                if (!text.isEmpty()) i.putExtra(Intent.EXTRA_TEXT, text);
+                if (!phone.isEmpty()) i.putExtra("jid", phone + "@s.whatsapp.net");
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                targets.add(i);
+            } catch (PackageManager.NameNotFoundException ignored) {}
+        }
+        if (targets.isEmpty()) { call.reject("WhatsApp is not installed", "NO_WHATSAPP"); return; }
+        try {
+            Intent launch = targets.size() == 1 ? targets.get(0)
+                : Intent.createChooser(targets.get(0), "Send with").putExtra(Intent.EXTRA_INITIAL_INTENTS, targets.subList(1, targets.size()).toArray(new Intent[0]));
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getActivity().startActivity(launch);
+            JSObject ret = new JSObject(); ret.put("apps", targets.size()); call.resolve(ret);
+        } catch (Exception e) { call.reject("Could not open WhatsApp: " + e.getMessage(), "NO_WHATSAPP"); }
     }
 
     private static class PdfAdapter extends PrintDocumentAdapter {

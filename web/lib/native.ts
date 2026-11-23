@@ -14,7 +14,10 @@ export function publicOrigin(): string {
 
 // ---------- Local Android plugins (see android/app/src/main/java/...) ----------
 type PrinterDevice = { name: string; address: string };
-interface NativePrintPlugin { printPdf(o: { path: string; jobName: string; a4?: boolean }): Promise<{ started: boolean }> }
+interface NativePrintPlugin {
+  printPdf(o: { path: string; jobName: string; a4?: boolean }): Promise<{ started: boolean }>;
+  shareToWhatsApp(o: { path: string; phone?: string; text?: string; mime?: string }): Promise<{ apps: number }>;
+}
 interface ThermalPrinterPlugin {
   listPaired(): Promise<{ devices: PrinterDevice[] }>;
   print(o: { address: string; data: string }): Promise<{ bytes: number }>;
@@ -62,6 +65,22 @@ function downloadInBrowser(blob: Blob, fileName: string) {
   const a = document.createElement('a');
   a.href = url; a.download = fileName; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
+ * Android: opens WhatsApp / WhatsApp Business with the file attached and the
+ * customer's chat pre-selected where WhatsApp allows it. Falls back to the
+ * normal share sheet. Returns how it was handled.
+ */
+export async function shareToWhatsApp(blob: Blob, fileName: string, phone: string, text: string): Promise<'whatsapp' | 'shared' | 'downloaded'> {
+  if (isNative()) {
+    try {
+      const uri = await writeCacheFile(blob, fileName);
+      await NativePrint.shareToWhatsApp({ path: uri, phone, text, mime: blob.type || 'application/pdf' });
+      return 'whatsapp';
+    } catch { /* WhatsApp missing or refused: use share sheet */ }
+  }
+  return shareFile(blob, fileName, { title: fileName, text });
 }
 
 /**

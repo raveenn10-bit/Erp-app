@@ -3,10 +3,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bluetooth, Download, MessageCircle, Printer, ReceiptText, RefreshCw, Settings2, Share2, X } from "lucide-react";
 import { api, formatWhatsApp, normalizeWhatsApp } from "@/lib/api";
-import { isNative, openExternal, printPdf, publicOrigin, saveFile, shareFile, type PrinterDevice } from "@/lib/native";
+import { isNative, openExternal, printPdf, saveFile, shareFile, shareToWhatsApp, type PrinterDevice } from "@/lib/native";
 import { pdfFileName, toInvoiceModel, whatsappMessage, type InvoiceDetail } from "@/lib/invoice/model";
 import { InvoiceA4, A4_PX } from "@/components/invoice-document";
-import { DEFAULT_PRINTER, listPairedPrinters, loadPrinter, paperSpec, printReceipt, savePrinter, testReceiptModel, type PrinterSettings } from "@/lib/invoice/printer";
+import { DEFAULT_PRINTER, listPairedPrinters, loadPrinter, paperSpec, printReceipt, savePrinter, shareReceiptToPrinterApp, testReceiptModel, type PrinterSettings } from "@/lib/invoice/printer";
 
 /** Scales the fixed-size A4 pages down to the available width (no overflow on phones). */
 function ScaledPreview({ children }: { children: React.ReactNode }) {
@@ -66,7 +66,8 @@ export function InvoiceActions({ id, close }: { id: string; close: () => void })
     pdfCache.current = { key, blob };
     return blob;
   }
-  const shareLink = () => (model?.shareToken ? `${publicOrigin()}/view/invoice/${model.shareToken}` : undefined);
+  // The public /view/invoice page on the production Worker renders unstyled
+  // (its CSP blocks the page styles), so messages carry the PDF, not the link.
 
   async function updateWhatsappNumber() {
     if (!data) return;
@@ -80,22 +81,23 @@ export function InvoiceActions({ id, close }: { id: string; close: () => void })
     finally { setIsUpdatingWa(false); }
   }
 
-  // Send the real PDF through the Android share sheet. The user picks WhatsApp
-  // and the recipient; Android cannot pre-select a WhatsApp contact for files.
+  // Send the real PDF straight into WhatsApp / WhatsApp Business. Where WhatsApp
+  // honours it the customer's chat opens directly; the user still taps Send.
   const sendPdf = () => run("share", async () => {
     if (!model) return;
-    const phone = formatWhatsApp(waInput || model.customer.whatsapp);
-    const text = whatsappMessage(model, shareLink());
-    const how = await shareFile(await pdf(), pdfFileName(model, "A4"), { title: `Invoice ${model.number}`, text });
+    const phone = normalizeWhatsApp(waInput || model.customer.whatsapp);
+    const text = whatsappMessage(model);
+    const how = await shareToWhatsApp(await pdf(), pdfFileName(model, "A4"), phone, text);
     if (how === "downloaded") return "PDF downloaded — attach it in WhatsApp.";
-    return phone ? `Choose WhatsApp, then send to ${model.customer.name} (${phone}). Not marked as delivered.` : "Share sheet opened.";
+    if (how === "whatsapp") return phone ? `WhatsApp opened with the PDF. Check it's ${model.customer.name} (${formatWhatsApp(phone)}), then tap Send.` : "WhatsApp opened with the PDF — pick the customer and tap Send.";
+    return "Choose WhatsApp, then the customer.";
   });
-  // Text + link straight into the customer's chat (recipient pre-filled, no attachment).
+  // Text-only message straight into the customer's chat (recipient pre-filled, no attachment).
   function openChat() {
     if (!model) return;
     const phone = normalizeWhatsApp(waInput || model.customer.whatsapp);
     if (!phone) { note("Please enter a valid WhatsApp number first.", false); return; }
-    openExternal(`https://wa.me/${phone}?text=${encodeURIComponent(whatsappMessage(model, shareLink()))}`);
+    openExternal(`https://wa.me/${phone}?text=${encodeURIComponent(whatsappMessage(model).replace("is attached", "is ready"))}`);
   }
 
   async function choosePrinterList() {
@@ -115,10 +117,11 @@ export function InvoiceActions({ id, close }: { id: string; close: () => void })
         ) : model && (
           <>
             <div className="ninv-actions" role="toolbar" aria-label="Invoice actions">
-              <button className="primary wa" disabled={!!busy} onClick={sendPdf}><MessageCircle size={16} />{busy === "share" ? "Preparing PDF…" : "Send PDF via WhatsApp"}</button>
+              <button className="primary wa" disabled={!!busy} onClick={sendPdf}><MessageCircle size={16} />{busy === "share" ? "Preparing PDF…" : "Send PDF on WhatsApp · WhatsApp යවන්න"}</button>
               <button className="secondary" disabled={!!busy} onClick={() => run("save", async () => saveFile(await pdf(), pdfFileName(model, "A4")))}><Download size={16} />{busy === "save" ? "Saving…" : "Download PDF"}</button>
               <button className="secondary" disabled={!!busy} onClick={() => run("print", async () => { await printPdf(await pdf(), pdfFileName(model, "A4"), true); })}><Printer size={16} />{busy === "print" ? "Preparing…" : "Print A4"}</button>
-              <button className="secondary" disabled={!!busy} onClick={() => run("receipt", () => printReceipt(model, printer))}><ReceiptText size={16} />{busy === "receipt" ? "Printing…" : `Receipt ${paperSpec(printer).mm}mm`}</button>
+              <button className="secondary" disabled={!!busy} onClick={() => run("receipt", () => printReceipt(model, printer))}><ReceiptText size={16} />{busy === "receipt" ? "Printing…" : `Print receipt ${paperSpec(printer).mm}mm`}</button>
+              <button className="secondary" disabled={!!busy} onClick={() => run("rawbt", () => shareReceiptToPrinterApp(model, printer))}><Printer size={16} />{busy === "rawbt" ? "Preparing…" : "Receipt → printer app"}</button>
               <button className="secondary" disabled={!!busy} onClick={() => run("other", async () => { await shareFile(await pdf(), pdfFileName(model, "A4"), { title: `Invoice ${model.number}` }); })}><Share2 size={16} />Share…</button>
               <button className="secondary icon-only" aria-label="Printer settings" aria-expanded={showPrinter} onClick={() => setShowPrinter(v => !v)}><Settings2 size={16} /></button>
             </div>
@@ -170,7 +173,7 @@ export function InvoiceActions({ id, close }: { id: string; close: () => void })
                 <input type="tel" inputMode="tel" value={waInput} onChange={(e) => setWaInput(e.target.value)} placeholder="e.g. 077 123 4567" />
               </label>
               <button className="secondary" type="button" disabled={isUpdatingWa} onClick={updateWhatsappNumber}>{isUpdatingWa ? "Saving…" : "Update number"}</button>
-              <button className="secondary" type="button" onClick={openChat}>Open chat (text + link)</button>
+              <button className="secondary" type="button" onClick={openChat}>Text only</button>
             </div>
 
             <ScaledPreview><InvoiceA4 m={model} /></ScaledPreview>

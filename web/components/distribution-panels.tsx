@@ -10,7 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, formatWhatsApp, idempotency, money, normalizeWhatsApp } from "@/lib/api";
-import { printDocumentSheet, publicOrigin, savePdfDoc } from "@/lib/native";
+import { isNative, printDocumentSheet, publicOrigin, savePdfDoc } from "@/lib/native";
 
 export type Product = {
   variant_id: string;
@@ -483,11 +483,15 @@ export function BillingPanel({
 
       const message = `Hello,\n\nYour invoice from Nugathalawa Ceylon Tea Export (Pvt) Ltd is ready.\n\nInvoice No: ${result.number}\nShop: ${shopName}\nTotal: ${totalStr}\nPaid: ${paidStr}\nBalance: ${balanceStr}\n\nView / Download Invoice:\n${invoiceLink}\n\nThank you!`;
 
-      window.open(
-        `https://wa.me/${normNumber}?text=${encodeURIComponent(message)}`,
-        "_blank",
-        "noopener,noreferrer"
-      );
+      // Android app: don't send the public link (that page renders unstyled on the
+      // production Worker). The invoice sheet opens next with "Send PDF on WhatsApp".
+      if (!isNative()) {
+        window.open(
+          `https://wa.me/${normNumber}?text=${encodeURIComponent(message)}`,
+          "_blank",
+          "noopener,noreferrer"
+        );
+      }
 
       onPosted(result.id);
     } catch (e) {

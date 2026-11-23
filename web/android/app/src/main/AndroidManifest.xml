@@ -32,6 +32,12 @@
         </provider>
     </application>
 
+    <!-- Needed on Android 11+ to detect WhatsApp / WhatsApp Business for direct PDF sharing -->
+    <queries>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+    </queries>
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
