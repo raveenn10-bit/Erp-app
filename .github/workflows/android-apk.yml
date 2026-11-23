@@ -1,0 +1,121 @@
+name: Android APK
+
+# Builds the Sanjeewa Distribution ERP Android app. This workflow never deploys
+# anything: no Wrangler, no D1, no Cloudflare credentials are used here.
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Also build a release-signed APK (requires signing secrets)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # Public HTTPS address of the existing ERP Worker (not a secret).
+      # Set it in Settings → Secrets and variables → Actions → Variables.
+      NEXT_PUBLIC_API_URL: ${{ vars.ERP_API_URL }}
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check API URL is configured
+        run: |
+          if [ -z "$NEXT_PUBLIC_API_URL" ]; then
+            echo "::error title=ERP_API_URL missing::Add a repository variable ERP_API_URL with the HTTPS address of the ERP Worker (e.g. https://sanjeewa-distribution-erp.<account>.workers.dev)."
+            exit 1
+          fi
+          case "$NEXT_PUBLIC_API_URL" in https://*) ;; *) echo "::error::ERP_API_URL must start with https://"; exit 1;; esac
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build Android web bundle
+        run: npm run build -w web
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Capacitor sync
+        working-directory: web
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: web/android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug \
+            -PversionCode=${{ github.run_number }} \
+            -PversionName=1.0.${{ github.run_number }}
+
+      - name: Collect debug APK
+        run: |
+          mkdir -p dist
+          cp web/android/app/build/outputs/apk/debug/app-debug.apk "dist/Sanjeewa-ERP-debug-1.0.${{ github.run_number }}.apk"
+          ls -la dist
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sanjeewa-ERP-Android
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ---------- Optional release build (manual run only) ----------
+      - name: Build release-signed APK
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release }}
+        working-directory: web/android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then echo "::error::Signing secrets are not configured"; exit 1; fi
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+          echo "$KEYSTORE_B64" | base64 -d > "$ANDROID_KEYSTORE_PATH"
+          ./gradlew --no-daemon assembleRelease \
+            -PversionCode=${{ github.run_number }} \
+            -PversionName=1.0.${{ github.run_number }}
+          rm -f "$ANDROID_KEYSTORE_PATH"
+          mkdir -p ../../dist-release
+          cp app/build/outputs/apk/release/app-release.apk "../../dist-release/Sanjeewa-ERP-1.0.${{ github.run_number }}.apk"
+
+      - name: Upload release APK
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sanjeewa-ERP-Android-Release
+          path: dist-release/*.apk
+          if-no-files-found: error
+          retention-days: 90

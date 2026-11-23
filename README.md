@@ -1,4 +1,9 @@
-# Sanjeewa Distribution ERP
+# Sanjeewa Distribution ERP — Android app repository
+
+> This repository builds the **Android app** (Capacitor). See **[ANDROID.md](ANDROID.md)** for setup, APK download, installation and updates.
+> The production web ERP, Worker and D1 database live in `raveenn10-bit/Erp-system`. Nothing in this repository deploys to or migrates production; the deployment notes below describe Erp-system and are kept for reference only.
+
+## Original ERP (reference)
 
 Cloudflare D1 and a Hono Workers API, with a mobile responsive Next.js 16 static frontend served by the same Worker. Sri Lanka currency is stored as **integer cents** and displayed in LKR. Business identity is loaded from `business_settings`.
 
