@@ -24,7 +24,7 @@ function ScaledPreview({ children }: { children: React.ReactNode }) {
     return () => ro.disconnect();
   }, [children]);
   return (
-    <div className="inv-preview" ref={outer} style={{ height }}>
+    <div className="ninv-preview" ref={outer} style={{ height }}>
       <div ref={inner} style={{ width: A4_PX.width, transform: `scale(${scale})`, transformOrigin: "top left" }}>{children}</div>
     </div>
   );
@@ -109,12 +109,12 @@ export function InvoiceActions({ id, close }: { id: string; close: () => void })
       <div className="dialog-card document-sheet invoice-sheet" role="dialog" aria-modal="true" aria-label="Invoice" onMouseDown={(e) => e.stopPropagation()}>
         <button className="secondary document-close" onClick={close}><X size={16} />Close</button>
         {detail.isLoading ? (
-          <div className="inv-skeleton" aria-busy="true"><div /><div /><div /><div /></div>
+          <div className="ninv-skeleton" aria-busy="true"><div /><div /><div /><div /></div>
         ) : detail.isError ? (
           <div className="error">Could not load invoice. <button className="secondary" onClick={() => detail.refetch()}><RefreshCw size={14} />Retry</button></div>
         ) : model && (
           <>
-            <div className="inv-actions" role="toolbar" aria-label="Invoice actions">
+            <div className="ninv-actions" role="toolbar" aria-label="Invoice actions">
               <button className="primary wa" disabled={!!busy} onClick={sendPdf}><MessageCircle size={16} />{busy === "share" ? "Preparing PDF…" : "Send PDF via WhatsApp"}</button>
               <button className="secondary" disabled={!!busy} onClick={() => run("save", async () => saveFile(await pdf(), pdfFileName(model, "A4")))}><Download size={16} />{busy === "save" ? "Saving…" : "Download PDF"}</button>
               <button className="secondary" disabled={!!busy} onClick={() => run("print", async () => { await printPdf(await pdf(), pdfFileName(model, "A4"), true); })}><Printer size={16} />{busy === "print" ? "Preparing…" : "Print A4"}</button>
@@ -164,7 +164,7 @@ export function InvoiceActions({ id, close }: { id: string; close: () => void })
               </section>
             )}
 
-            <div className="inv-wa">
+            <div className="ninv-wa">
               <MessageCircle size={18} />
               <label>WhatsApp recipient
                 <input type="tel" inputMode="tel" value={waInput} onChange={(e) => setWaInput(e.target.value)} placeholder="e.g. 077 123 4567" />

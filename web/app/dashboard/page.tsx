@@ -54,6 +54,7 @@ import {
 } from "lucide-react";
 import { api, idempotency, money } from "@/lib/api";
 import { InvoiceActions } from "@/components/invoice-actions";
+import { ReportsPanel } from "@/components/reports-panel";
 import {
   NotificationBellAndDrawer,
   CreditAlertsDashboardPanel,
@@ -159,7 +160,13 @@ function Workspace() {
     [toast, setToast] = useState(""),
     [invoiceId, setInvoiceId] = useState<string | null>(null),
     [customerAccountId, setCustomerAccountId] = useState<string | null>(null),
-    [focusBilling, setFocusBilling] = useState(false);
+    [focusBilling, setFocusBilling] = useState(false),
+    [editingUser, setEditingUser] = useState<{ id: string; name: string; username?: string; role_id: string } | null>(null),
+    [editUsername, setEditUsername] = useState(""),
+    [editPassword, setEditPassword] = useState(""),
+    [editPasscode, setEditPasscode] = useState(""),
+    [editMsg, setEditMsg] = useState(""),
+    [editBusy, setEditBusy] = useState(false);
   const reduced = useReducedMotion();
   const me = useQuery({
     queryKey: ["me"],
@@ -691,7 +698,7 @@ function Workspace() {
               <CreditNotesPanel invoices={invoices.data || []} products={products.data || []} />
             </>
           )}
-          {tab === "Reports" && user.admin && <Reports />}
+          {tab === "Reports" && user.admin && <ReportsPanel />}
           {tab === "Team" && user.admin && (
             <>
               <Lead
@@ -703,39 +710,72 @@ function Workspace() {
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>Name</th>
-                        <th>Email</th>
+                                                <th>Name (නම)</th>
+                        <th>Username (පරිශීලක නාමය)</th>
                         <th>Role</th>
+                        <th>4-Digit PIN</th>
                         <th>Status</th>
                         <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(staff.data || []).map((s) => (
+                      {(staff.data || []).map((s: any) => (
                         <tr key={s.id}>
-                          <td>{s.name}</td>
-                          <td>{s.email}</td>
-                          <td>{s.role_id}</td>
+                          <td><strong>{s.name}</strong></td>
+                          <td>
+                            <code style={{ background: "var(--brand-background, #F3FAF6)", padding: "3px 8px", borderRadius: 6, fontWeight: 700, color: "var(--brand-primary, #0C5051)" }}>
+                              {s.username || s.name.toLowerCase().replace(/\s+/g, '')}
+                            </code>
+                          </td>
+                          <td>
+                            <span className="badge" style={{ textTransform: "capitalize" }}>
+                              {s.role_id?.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td>
+                            {s.has_passcode ? (
+                              <span style={{ color: "var(--brand-primary, #0C5051)", fontWeight: 700 }}>✓ Configured</span>
+                            ) : (
+                              <span style={{ color: "var(--brand-text-muted, #647773)" }}>— Not set</span>
+                            )}
+                          </td>
                           <td>
                             <span className="badge">
                               {s.active ? "Active" : "Inactive"}
                             </span>
                           </td>
                           <td>
-                            {s.id !== user.id && (
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <button
+                                type="button"
                                 className="secondary"
-                                onClick={() =>
-                                  submit(
-                                    `/users/${s.id}`,
-                                    { active: !s.active },
-                                    "PATCH",
-                                  )
-                                }
+                                style={{ padding: "4px 10px", fontSize: 12 }}
+                                onClick={() => {
+                                  setEditingUser(s);
+                                  setEditUsername(s.username || "");
+                                  setEditPassword("");
+                                  setEditPasscode("");
+                                  setEditMsg("");
+                                }}
                               >
-                                {s.active ? "Deactivate" : "Activate"}
+                                Edit Credentials
                               </button>
-                            )}
+                              {s.id !== user.id && (
+                                <button
+                                  className="secondary"
+                                  style={{ padding: "4px 10px", fontSize: 12 }}
+                                  onClick={() =>
+                                    submit(
+                                      `/users/${s.id}`,
+                                      { active: !s.active },
+                                      "PATCH",
+                                    )
+                                  }
+                                >
+                                  {s.active ? "Deactivate" : "Activate"}
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1763,8 +1803,10 @@ function StaffForm({ submit }: { submit: (p: string, v: unknown) => void }) {
     const d = val(e);
     submit("/users", {
       name: d.name,
-      email: d.email,
+      username: d.username,
+      email: d.email || undefined,
       password: d.password,
+      passcode: d.passcode || undefined,
       roleId: d.roleId,
     });
     e.currentTarget.reset();
@@ -1773,19 +1815,27 @@ function StaffForm({ submit }: { submit: (p: string, v: unknown) => void }) {
     <form onSubmit={onSubmit}>
       <div className="form-grid">
         <label>
-          Full name
-          <input name="name" required />
+          Full name (සම්පූර්ණ නම)
+          <input name="name" required placeholder="e.g. Kamal Perera" />
         </label>
         <label>
-          Email
-          <input type="email" name="email" required />
+          Username (පරිශීලක නාමය)
+          <input name="username" required placeholder="e.g. kamal_rep" minLength={2} />
         </label>
         <label>
-          Temporary password (8+ characters)
-          <input name="password" type="password" minLength={8} required />
+          Password (මුරපදය)
+          <input name="password" type="password" minLength={6} required placeholder="Password (min 6 chars)" />
         </label>
         <label>
-          Role
+          4-Digit Quick PIN (අංක 4 කේතය - Optional)
+          <input name="passcode" type="password" inputMode="numeric" maxLength={4} placeholder="e.g. 1234" />
+        </label>
+        <label>
+          Email (ඊමේල් - Optional)
+          <input type="email" name="email" placeholder="Optional (defaults to username@nugathalawa.erp)" />
+        </label>
+        <label>
+          Role (භූමිකාව)
           <select name="roleId">
             <option value="sales_rep">Sales Representative</option>
             <option value="staff">Staff</option>
@@ -1794,7 +1844,7 @@ function StaffForm({ submit }: { submit: (p: string, v: unknown) => void }) {
         </label>
       </div>
       <div className="form-actions">
-        <button className="primary">Create account</button>
+        <button className="primary">Create account (ගිණුම සාදන්න)</button>
       </div>
     </form>
   );
@@ -1833,122 +1883,5 @@ function SettingsForm({
         <button className="primary">Save settings</button>
       </div>
     </form>
-  );
-}
-
-function Reports() {
-  const [kind, setKind] = useState("daily-sales"),
-    [from, setFrom] = useState(
-      new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
-    ),
-    [to, setTo] = useState(new Date().toISOString().slice(0, 10));
-  const report = useQuery({
-    queryKey: ["report", kind, from, to],
-    queryFn: () =>
-      api<Record<string, string | number>[]>(
-        `/reports/${kind}?from=${from}&to=${to}`,
-      ),
-  });
-  function csv() {
-    const rows = report.data || [];
-    if (!rows.length) return;
-    const keys = Object.keys(rows[0]);
-    const escape = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
-    const content = [
-      keys.map(escape).join(","),
-      ...rows.map((row) => keys.map((k) => escape(row[k])).join(",")),
-    ].join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob([content], { type: "text/csv;charset=utf-8" }),
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${kind}-${from}-${to}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-  return (
-    <>
-      <Lead
-        title="Business reports"
-        subtitle="Live operational data, filtered by date and ready to export."
-      />
-      <div className="panel">
-        <div className="form-grid">
-          <label>
-            Report
-            <select value={kind} onChange={(e) => setKind(e.target.value)}>
-              {[
-                ["daily-sales", "Daily sales"],
-                ["product-sales", "Product sales & profit"],
-                ["outstanding", "Customer outstanding"],
-                ["collections", "Payment collections"],
-                ["stock-movements", "Stock movements"],
-              ].map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            From
-            <input
-              type="date"
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-            />
-          </label>
-          <label>
-            To
-            <input
-              type="date"
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-            />
-          </label>
-        </div>
-        <div className="form-actions">
-          <button
-            className="secondary"
-            disabled={!report.data?.length}
-            onClick={csv}
-          >
-            <Download size={17} />
-            Export CSV
-          </button>
-        </div>
-      </div>
-      <div className="panel" style={{ marginTop: 20 }}>
-        {report.isLoading ? (
-          <div className="loader" />
-        ) : report.isError ? (
-          <div className="error">Could not load this report.</div>
-        ) : report.data?.length ? (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  {Object.keys(report.data[0]).map((k) => (
-                    <th key={k}>{k.replaceAll("_", " ")}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {report.data.map((row, i) => (
-                  <tr key={i}>
-                    {Object.values(row).map((v, j) => (
-                      <td key={j}>{v ?? "—"}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty text="No records in this date range." />
-        )}
-      </div>
-    </>
   );
 }

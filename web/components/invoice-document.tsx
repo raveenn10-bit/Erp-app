@@ -9,7 +9,7 @@ function Header({ m, compact }: { m: InvoiceModel; compact?: boolean }) {
   const contacts = [m.business.phone && `Tel ${m.business.phone}`, m.business.whatsapp && `WhatsApp ${m.business.whatsapp}`, m.business.email].filter(Boolean).join('  ·  ');
   return (
     <header className={`inv-head ${compact ? 'compact' : ''}`}>
-      <div className="inv-brand">
+      <div className="ninv-brand">
         <img src="/nugathalawa-logo.jpg" alt="" crossOrigin="anonymous" />
         <div>
           <h1>{m.business.name}</h1>
@@ -17,7 +17,7 @@ function Header({ m, compact }: { m: InvoiceModel; compact?: boolean }) {
           {!compact && contacts && <p>{contacts}</p>}
         </div>
       </div>
-      <div className="inv-title">
+      <div className="ninv-title">
         <span>{m.status === 'cancelled' ? 'CANCELLED INVOICE' : 'SALES INVOICE'}</span>
         <b>{m.number}</b>
         {!compact && <dl>
@@ -32,7 +32,7 @@ function Header({ m, compact }: { m: InvoiceModel; compact?: boolean }) {
 function Table({ m, lines }: { m: InvoiceModel; lines: InvoiceModel['lines'] }) {
   if (!lines.length) return null;
   return (
-    <table className="inv-table">
+    <table className="ninv-table">
       <thead>
         <tr>
           <th className="n">#</th><th>Product</th><th>Pack size</th><th className="r">Qty</th><th className="r">Unit price</th>
@@ -56,13 +56,13 @@ function Table({ m, lines }: { m: InvoiceModel; lines: InvoiceModel['lines'] }) 
 
 function Totals({ m }: { m: InvoiceModel }) {
   return (
-    <section className="inv-bottom">
-      <div className="inv-notes">
+    <section className="ninv-bottom">
+      <div className="ninv-notes">
         {m.paymentTerms && <p><b>Payment terms</b>{m.paymentTerms}</p>}
         {m.notes && <p><b>Notes</b>{m.notes}</p>}
         {m.terms && <p><b>Terms &amp; conditions</b>{m.terms}</p>}
       </div>
-      <dl className="inv-totals">
+      <dl className="ninv-totals">
         <dt>Subtotal</dt><dd>{lkr(m.subtotal)}</dd>
         {m.itemDiscount > 0 && <><dt>Item discounts</dt><dd>{lkr(-m.itemDiscount)}</dd></>}
         {m.invoiceDiscount > 0 && <><dt>Invoice discount</dt><dd>{lkr(-m.invoiceDiscount)}</dd></>}
@@ -74,19 +74,19 @@ function Totals({ m }: { m: InvoiceModel }) {
   );
 }
 
-/** Paginated A4 invoice. Each `.inv-page` is exactly one printed/PDF page. */
+/** Paginated A4 invoice. Each `.ninv-page` is exactly one printed/PDF page. */
 export function InvoiceA4({ m }: { m: InvoiceModel }) {
   const pages = paginate(m.lines);
   return (
-    <div className="inv-doc">
+    <div className="ninv-doc">
       {pages.map((lines, p) => {
         const last = p === pages.length - 1;
         return (
-          <article className="inv-page" key={p}>
-            <div className="inv-band" />
+          <article className="ninv-page" key={p}>
+            <div className="ninv-band" />
             <Header m={m} compact={p > 0} />
             {p === 0 && (
-              <section className="inv-parties">
+              <section className="ninv-parties">
                 <div>
                   <span>Bill to</span>
                   <b>{m.customer.name}</b>
@@ -102,15 +102,15 @@ export function InvoiceA4({ m }: { m: InvoiceModel }) {
               </section>
             )}
             <Table m={m} lines={lines} />
-            {!last && <p className="inv-cont">Continued on next page…</p>}
+            {!last && <p className="ninv-cont">Continued on next page…</p>}
             {last && <>
               <Totals m={m} />
-              <section className="inv-sign">
+              <section className="ninv-sign">
                 <div><i /><span>Authorized signature</span><small>For {m.business.name}</small></div>
                 <div><i /><span>Customer signature</span><small>Received in good condition</small></div>
               </section>
             </>}
-            <footer className="inv-foot">
+            <footer className="ninv-foot">
               <span>Thank you for your business · ස්තුතියි</span>
               <span>{m.number} · Page {p + 1} of {pages.length}</span>
             </footer>

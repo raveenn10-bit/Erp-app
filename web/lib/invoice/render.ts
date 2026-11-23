@@ -1,6 +1,6 @@
 'use client';
 // Turns the invoice markup into real output files:
-//  • A4 PDF: one jsPDF page per `.inv-page`, rendered with the WebView's own
+//  • A4 PDF: one jsPDF page per `.ninv-page`, rendered with the WebView's own
 //    text engine so Sinhala/Tamil script is shaped correctly.
 //  • Receipt PDF and ESC/POS raster bytes for Bluetooth thermal printers.
 import { createElement, type ReactElement } from 'react';
@@ -35,7 +35,7 @@ async function snap(el: HTMLElement, scale: number) {
 export async function buildA4Pdf(m: InvoiceModel): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   return renderOffscreen(createElement(InvoiceA4, { m }), A4_PX.width, async host => {
-    const pages = Array.from(host.querySelectorAll<HTMLElement>('.inv-page'));
+    const pages = Array.from(host.querySelectorAll<HTMLElement>('.ninv-page'));
     const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
     pdf.setProperties({ title: `Invoice ${m.number}`, subject: m.customer.name, creator: 'Sanjeewa Distribution ERP', author: m.business.name });
     for (let i = 0; i < pages.length; i++) {
