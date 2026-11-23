@@ -1,0 +1,17 @@
+{
+  "name": "sanjeewa-distribution-erp-android",
+  "private": true,
+  "workspaces": [
+    "web",
+    "worker"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w web",
+    "dev:api": "npm run dev -w worker",
+    "typecheck": "npm run typecheck -w worker && npm run typecheck -w web",
+    "test": "npm test -w worker",
+    "build": "npm run build -w web && npm run build -w worker",
+    "deploy": "node -e \"console.error('Deploying from Erp-app is disabled. Production is owned by Erp-system.');process.exit(1)\"",
+    "deploy:worker": "npm run deploy"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  // ANDROID APP REPOSITORY — LOCAL DEVELOPMENT ONLY.
+  // This file intentionally has NO production bindings. The production Worker
+  // and D1 database are owned by raveenn10-bit/Erp-system and must never be
+  // deployed or migrated from this repository.
+  // `wrangler dev` uses a local, throwaway D1 database for testing.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "sanjeewa-erp-android-localdev",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-11-22",
+  "assets": {
+    "directory": "web/out",
+    "run_worker_first": ["/api/*", "/view/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sanjeewa-erp-localdev",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+  "vars": {
+    "FRONTEND_ORIGIN": ""
+  }
+}

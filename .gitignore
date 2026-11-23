@@ -1,0 +1,22 @@
+node_modules/
+.next/
+out/
+dist/
+.wrangler/
+.env
+.env.local
+.dev.vars
+.wrangler-dry-run/
+*.tsbuildinfo
+.DS_Store
+bootstrap-admin.ps1
+
+
+# Android / Capacitor
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+*.jks
+*.keystore
+android/keystore.properties
