@@ -190,6 +190,13 @@ export async function initNativeShell(onBack: () => boolean) {
     webFetch(href).then(r => r.blob()).then(b => saveFile(b, name)).then(msg => toast(msg)).catch(() => toast('Could not save the file'));
     return true;
   };
+  // Any jsPDF doc.save() anywhere in the app → real file on Android.
+  import('jspdf').then(({ jsPDF }) => {
+    (jsPDF as unknown as { API: { save: (this: { output(t: 'blob'): Blob }, name?: string) => unknown } }).API.save = function (name = 'document.pdf') {
+      saveFile(this.output('blob'), name).then(toast).catch(() => toast('Could not save the PDF'));
+      return this;
+    };
+  }).catch(() => {});
   const anchorClick = HTMLAnchorElement.prototype.click;
   HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) { if (!handleDownload(this)) anchorClick.call(this); };
   document.addEventListener('click', e => {
