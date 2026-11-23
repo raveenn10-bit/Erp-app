@@ -3,7 +3,7 @@
 // Keystore design. The server session is always re-validated with /api/me,
 // so roles and permissions are enforced exactly as for a normal login.
 import { registerPlugin } from '@capacitor/core';
-import { api, apiBase } from './api';
+import { api, apiBase, ApiError } from './api';
 import { isNative } from './native';
 
 export type BiometricStatus = {
@@ -39,6 +39,7 @@ export function biometricError(e: unknown): { code: string; message: string } | 
     NOT_AVAILABLE: 'No fingerprint or face is set up on this phone. · ජෛවමිතික සකසා නැත.',
     SESSION_EXPIRED: 'Your saved sign-in has expired. Please sign in with PIN or password. · නැවත පිවිසෙන්න.',
     NO_SESSION: 'Please sign in first, then turn on biometrics.',
+    OFFLINE: 'No internet and no saved data on this phone yet. Connect once, then try again. · අන්තර්ජාලය නැත.',
   };
   return { code, message: msg[code] || (e as Error)?.message || 'Biometric sign-in failed. Use PIN or password.' };
 }
@@ -58,15 +59,20 @@ export async function disableBiometric() {
  */
 export async function signInWithBiometrics(): Promise<Me['user']> {
   const saved = await Bio.unlock();
-  try {
-    const me = await api<Me>('/me');
-    if (me.user.id !== saved.userId) throw Object.assign(new Error('Different user'), { code: 'SESSION_EXPIRED' });
-    return me.user;
-  } catch (e) {
+  let me: Me;
+  try { me = await api<Me>('/me'); }
+  catch (e) {
+    // Offline with no usable cache: keep the credential, just can't open yet.
+    if (!(e instanceof ApiError)) { await Bio.lock().catch(() => {}); throw Object.assign(new Error('No internet and no saved data on this phone yet. Connect once, then try again.'), { code: 'OFFLINE' }); }
     await Bio.lock().catch(() => {});
-    await disableBiometric();
-    throw Object.assign(new Error((e as Error).message), { code: 'SESSION_EXPIRED' });
+    if (e.status === 401) await disableBiometric(); // revoked / expired on the server
+    throw Object.assign(new Error(e.message), { code: e.status === 401 ? 'SESSION_EXPIRED' : 'ERROR' });
   }
+  if (me.user.id !== saved.userId) {
+    await Bio.lock().catch(() => {}); await disableBiometric();
+    throw Object.assign(new Error('Different user'), { code: 'SESSION_EXPIRED' });
+  }
+  return me.user;
 }
 
 /** Redirect to login when the native side locks the app after background time. */

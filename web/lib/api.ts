@@ -1,55 +1,39 @@
-// Web: the static export and API are served by the same Worker (same origin).
-// Android: the bundled app calls the existing Worker at NEXT_PUBLIC_API_URL.
-// On Android, Capacitor routes fetch() through the native HTTP stack, so the
-// HttpOnly session cookie lives in Android's private cookie store and is never
-// readable from JavaScript.
-import { Capacitor, CapacitorHttp } from '@capacitor/core';
+// Web: same-origin Worker. Android: bundled app → NEXT_PUBLIC_API_URL over
+// native HTTP, with an encrypted on-device cache for reads and a durable
+// outbox for idempotent writes when the server can't be reached.
+import { apiBase, isNativeApp, NetworkError, rawRequest } from './http';
 
-export const apiBase=process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/,'')||'';
-
+export { apiBase };
 /** Fired when the server says the session is gone, so the UI can return to login. */
 export const SESSION_EXPIRED_EVENT='erp-session-expired';
 
-function nativeHeaders():Record<string,string>{
-  if(typeof window==='undefined'||!Capacitor.isNativePlatform()||!apiBase)return {};
-  // The Worker's CSRF guard requires an Origin header on writes. Browsers add it
-  // automatically; native HTTP does not. The app identifies itself with the
-  // ERP's own origin, exactly as the same-origin web app does. Authentication
-  // (session cookie) and role permissions are still enforced by the server.
-  // See ANDROID.md › "Backend items for approval" for the recommended
-  // long-term server-side app origin allow-list.
-  return {Origin:new URL(apiBase).origin,'X-ERP-Client':'android'};
-}
-
-type Result={ok:boolean;status:number;data:any};
-
-// Android: call the native HTTP plugin directly. Capacitor's automatic fetch()
-// patch builds a browser Request first, which silently drops the Origin
-// header, so the Worker's CSRF check rejected every sign-in ("Invalid
-// request origin").
-async function nativeRequest(url:string,init:RequestInit):Promise<Result>{
-  const headers:Record<string,string>={'Content-Type':'application/json',...nativeHeaders(),...(init.headers as Record<string,string>||{})};
-  const res=await CapacitorHttp.request({url,method:(init.method||'GET').toUpperCase(),headers,data:typeof init.body==='string'?init.body:undefined,responseType:'json',connectTimeout:20000,readTimeout:30000});
-  let data=res.data;
-  if(typeof data==='string'){try{data=JSON.parse(data);}catch{data={error:data||'Unexpected response'};}}
-  return {ok:res.status>=200&&res.status<300,status:res.status,data:data??{}};
-}
-async function webRequest(url:string,init:RequestInit):Promise<Result>{
-  const response=await fetch(url,{...init,credentials:'include',headers:{'Content-Type':'application/json',...init.headers},cache:'no-store'});
-  const data=await response.json().catch(()=>({error:'Unexpected response'}));
-  return {ok:response.ok,status:response.status,data};
-}
+export class ApiError extends Error { constructor(msg:string, public status:number){ super(msg); this.name='ApiError'; } }
 
 export async function api<T>(path:string,init:RequestInit={}):Promise<T>{
-  const url=`${apiBase}/api${path}`;
-  let r:Result;
+  const method=(init.method||'GET').toUpperCase();
+  const native=isNativeApp();
+  const offline=native?await import('./offline/store'):null;
+  let r;
   try{
-    r=typeof window!=='undefined'&&Capacitor.isNativePlatform()&&apiBase?await nativeRequest(url,init):await webRequest(url,init);
-  }catch{
-    throw new Error(typeof navigator!=='undefined'&&!navigator.onLine?'No internet connection. Check your network and try again.':'Cannot reach the ERP server. Please try again.');
+    if(offline&&!offline.getSyncState().online)throw new NetworkError('Offline');
+    r=await rawRequest(path,init);
+  }catch(e){
+    if(!(e instanceof NetworkError))throw e;
+    if(offline){
+      if(method==='GET'){
+        const cached=await offline.cacheGet<T>(path).catch(()=>null);
+        if(cached!==null)return cached;
+      }else if(typeof init.body==='string'&&offline.canQueue(method,path,JSON.parse(init.body))){
+        throw await offline.enqueue(method,path,init.body);
+      }
+    }
+    throw new Error(typeof navigator!=='undefined'&&!navigator.onLine||offline&&!offline.getSyncState().online
+      ?'No internet connection. This screen needs the internet (not saved offline). · අන්තර්ජාලය නැත.'
+      :'Cannot reach the ERP server. Please try again.');
   }
   if(r.status===401&&path!=='/login'&&typeof window!=='undefined')window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
-  if(!r.ok)throw new Error(r.data?.error||'Request failed');
+  if(!r.ok)throw new ApiError(r.data?.error||'Request failed',r.status);
+  if(offline&&method==='GET')offline.cachePut(path,r.data).catch(()=>{});
   return r.data as T;
 }
 export const money=(cents:number)=>new Intl.NumberFormat('en-LK',{style:'currency',currency:'LKR',maximumFractionDigits:2}).format(cents/100);

@@ -10,7 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, formatWhatsApp, idempotency, money, normalizeWhatsApp } from "@/lib/api";
-import { isNative, printDocumentSheet, publicOrigin, savePdfDoc } from "@/lib/native";
+import { isNative, printDocumentSheet, publicOrigin, savePdfDoc, toast } from "@/lib/native";
 
 export type Product = {
   variant_id: string;
@@ -51,6 +51,11 @@ const percent = (base: number, value: number) =>
 const warehouses = (stocks: Stock[]) => [
   ...new Map(stocks.map((s) => [s.warehouse_id, s.warehouse])).entries(),
 ];
+
+/** After a sale/issue was saved offline (PENDING SYNC), clear the form like a normal post. */
+function resetLinesOffline(setLines: (f: (l: Line[]) => Line[]) => void) {
+  setLines((l) => l.slice(0, 1).map((x) => ({ ...x, variantId: "", quantity: 1 })));
+}
 
 export function BillingSettings() {
   const client = useQueryClient();
@@ -434,7 +439,7 @@ export function BillingPanel({
       });
       await client.invalidateQueries({ queryKey: ["invoice-drafts"] });
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -450,7 +455,7 @@ export function BillingPanel({
       await client.invalidateQueries();
       onPosted(result.id);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -501,7 +506,7 @@ export function BillingPanel({
 
       onPosted(result.id);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -884,7 +889,7 @@ export function FreeIssuePanel({
       await client.invalidateQueries({ queryKey: ["free-issues"] });
       setDocumentId(result.id);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
     }
   }
   return (
@@ -1112,7 +1117,7 @@ export function ConsignmentPanel({
       await client.invalidateQueries({ queryKey: ["consignments"] });
       setSelected(r.id);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
     }
   }
   async function settle(e: React.FormEvent<HTMLFormElement>) {
@@ -1142,7 +1147,7 @@ export function ConsignmentPanel({
       await client.invalidateQueries();
       onInvoice(r.invoiceId);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
     }
     void item;
   }
@@ -1166,7 +1171,7 @@ export function ConsignmentPanel({
       });
       await client.invalidateQueries();
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else setError((e as Error).message);
     }
   }
   return (

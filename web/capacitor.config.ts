@@ -16,6 +16,8 @@ const config: CapacitorConfig = {
     // HttpOnly session cookie is kept in Android's private CookieManager.
     CapacitorHttp: { enabled: true },
     CapacitorCookies: { enabled: true },
+    // Offline database: SQLCipher-encrypted, passphrase kept in Android Keystore-backed storage.
+    CapacitorSQLite: { androidIsEncryption: true, androidBiometric: { biometricAuth: false } },
     SplashScreen: {
       launchShowDuration: 1200,
       launchAutoHide: true,

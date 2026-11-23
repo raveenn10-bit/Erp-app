@@ -57,6 +57,7 @@ import { api, idempotency, money } from "@/lib/api";
 import { InvoiceActions } from "@/components/invoice-actions";
 import { BiometricSettings } from "@/components/biometric-login";
 import { disableBiometric } from "@/lib/biometric";
+import { isNative } from "@/lib/native";
 import { ReportsPanel } from "@/components/reports-panel";
 import {
   NotificationBellAndDrawer,
@@ -314,6 +315,13 @@ function Workspace() {
   async function signOut() {
     // Sign out revokes the server session, so the biometric credential
     // protecting it is useless: remove it from this phone as well.
+    if (isNative()) {
+      const off = await import("@/lib/offline/store");
+      const st = off.getSyncState();
+      const waiting = st.pending + st.conflicts + st.failed;
+      if (waiting && !confirm(`${waiting} item(s) are saved on this phone and not yet on the server. They stay on the phone and upload after you sign in again. Sign out anyway?`)) return;
+      await off.clearCache().catch(() => {});
+    }
     await disableBiometric();
     await api("/logout", { method: "POST" }).catch(() => {});
     router.replace("/login");
