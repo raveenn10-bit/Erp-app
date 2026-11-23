@@ -121,7 +121,7 @@ export function InvoiceActions({ id, close }: { id: string; close: () => void })
               <button className="secondary" disabled={!!busy} onClick={() => run("save", async () => saveFile(await pdf(), pdfFileName(model, "A4")))}><Download size={16} />{busy === "save" ? "Saving…" : "Download PDF"}</button>
               <button className="secondary" disabled={!!busy} onClick={() => run("print", async () => { await printPdf(await pdf(), pdfFileName(model, "A4"), true); })}><Printer size={16} />{busy === "print" ? "Preparing…" : "Print A4"}</button>
               <button className="secondary" disabled={!!busy} onClick={() => run("receipt", () => printReceipt(model, printer))}><ReceiptText size={16} />{busy === "receipt" ? "Printing…" : `Print receipt ${paperSpec(printer).mm}mm`}</button>
-              <button className="secondary" disabled={!!busy} onClick={() => run("rawbt", () => shareReceiptToPrinterApp(model, printer))}><Printer size={16} />{busy === "rawbt" ? "Preparing…" : "Receipt → printer app"}</button>
+              <button className="secondary" disabled={!!busy} onClick={() => run("rawbt", () => shareReceiptToPrinterApp(model, printer))}><Printer size={16} />{busy === "rawbt" ? "Preparing…" : "Receipt image → other app"}</button>
               <button className="secondary" disabled={!!busy} onClick={() => run("other", async () => { await shareFile(await pdf(), pdfFileName(model, "A4"), { title: `Invoice ${model.number}` }); })}><Share2 size={16} />Share…</button>
               <button className="secondary icon-only" aria-label="Printer settings" aria-expanded={showPrinter} onClick={() => setShowPrinter(v => !v)}><Settings2 size={16} /></button>
             </div>
@@ -131,9 +131,9 @@ export function InvoiceActions({ id, close }: { id: string; close: () => void })
               <section className="printer-panel" aria-label="Thermal printer settings">
                 <h3><Bluetooth size={16} /> Receipt printer</h3>
                 <div className="seg-row">
-                  {(["bluetooth", "system"] as const).map(mode => (
-                    <button key={mode} className={printer.mode === mode ? "primary" : "secondary"} onClick={() => updatePrinter({ ...printer, mode })} disabled={mode === "bluetooth" && !native}>
-                      {mode === "bluetooth" ? "Bluetooth (ESC/POS)" : "Android print service"}
+                  {(["rawbt", "bluetooth", "system"] as const).map(mode => (
+                    <button key={mode} className={printer.mode === mode ? "primary" : "secondary"} onClick={() => updatePrinter({ ...printer, mode })} disabled={mode !== "system" && !native}>
+                      {mode === "rawbt" ? "RawBT app (recommended)" : mode === "bluetooth" ? "Bluetooth (direct)" : "Android print service"}
                     </button>
                   ))}
                 </div>

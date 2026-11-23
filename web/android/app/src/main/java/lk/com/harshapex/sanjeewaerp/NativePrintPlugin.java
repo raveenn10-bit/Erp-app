@@ -107,6 +107,26 @@ public class NativePrintPlugin extends Plugin {
         } catch (Exception e) { call.reject("Could not open WhatsApp: " + e.getMessage(), "NO_WHATSAPP"); }
     }
 
+    /**
+     * Sends a ready ESC/POS byte stream to the RawBT app ("rawbt:base64,…"),
+     * which forwards it unchanged to the selected Bluetooth/USB printer:
+     * exact paper width, portrait, cut at the end — no page scaling/rotation.
+     */
+    @PluginMethod
+    public void printRawBt(PluginCall call) {
+        String data = call.getString("data");
+        if (data == null || data.isEmpty()) { call.reject("data is required"); return; }
+        try { getContext().getPackageManager().getPackageInfo("ru.a402d.rawbtprinter", 0); }
+        catch (PackageManager.NameNotFoundException e) { call.reject("RawBT is not installed", "NO_RAWBT"); return; }
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("rawbt:base64," + data));
+            i.setPackage("ru.a402d.rawbtprinter");
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getActivity().startActivity(i);
+            call.resolve();
+        } catch (Exception e) { call.reject("Could not open RawBT: " + e.getMessage(), "NO_RAWBT"); }
+    }
+
     private static class PdfAdapter extends PrintDocumentAdapter {
         private final File file; private final String name;
         PdfAdapter(File file, String name) { this.file = file; this.name = name; }

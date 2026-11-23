@@ -17,6 +17,7 @@ type PrinterDevice = { name: string; address: string };
 interface NativePrintPlugin {
   printPdf(o: { path: string; jobName: string; a4?: boolean }): Promise<{ started: boolean }>;
   shareToWhatsApp(o: { path: string; phone?: string; text?: string; mime?: string }): Promise<{ apps: number }>;
+  printRawBt(o: { data: string }): Promise<void>;
 }
 interface ThermalPrinterPlugin {
   listPaired(): Promise<{ devices: PrinterDevice[] }>;

@@ -1,17 +1,17 @@
 'use client';
-import { isNative, ThermalPrinter, printPdf, shareFile, type PrinterDevice } from '@/lib/native';
+import { isNative, NativePrint, ThermalPrinter, printPdf, shareFile, type PrinterDevice } from '@/lib/native';
 import { buildReceiptPdf, buildReceiptPng, bytesToBase64, canvasToEscPos, renderReceiptCanvas } from './render';
 import type { InvoiceModel } from './model';
 
 export type PrinterSettings = {
   /** 'bluetooth' = direct ESC/POS to a paired printer; 'system' = Android print service. */
-  mode: 'bluetooth' | 'system';
+  mode: 'rawbt' | 'bluetooth' | 'system';
   paper: '58' | '80' | 'custom';
   customDots: number;
   customMm: number;
   device: PrinterDevice | null;
 };
-export const DEFAULT_PRINTER: PrinterSettings = { mode: 'bluetooth', paper: '58', customDots: 384, customMm: 58, device: null };
+export const DEFAULT_PRINTER: PrinterSettings = { mode: 'rawbt', paper: '58', customDots: 384, customMm: 58, device: null };
 const KEY = 'thermal-printer';
 
 export function paperSpec(s: PrinterSettings) {
@@ -44,6 +44,17 @@ export async function listPairedPrinters(): Promise<PrinterDevice[]> {
 
 export async function printReceipt(m: InvoiceModel, s: PrinterSettings): Promise<string> {
   const { dots, mm } = paperSpec(s);
+  if (s.mode === 'rawbt' && isNative()) {
+    // Portrait raster at the exact printer width, then feed + cut: nothing for RawBT to scale or rotate.
+    const canvas = await renderReceiptCanvas(m, dots);
+    try {
+      await NativePrint.printRawBt({ data: bytesToBase64(canvasToEscPos(canvas, dots)) });
+      return 'Sent to RawBT printer';
+    } catch (e) {
+      if ((e as { code?: string }).code === 'NO_RAWBT') throw new Error('RawBT app is not installed. Install RawBT from Play Store, or choose "Bluetooth (direct)" in printer settings.');
+      throw e;
+    }
+  }
   if (s.mode === 'bluetooth' && isNative()) {
     if (!s.device) throw new Error('Choose a paired printer in Printer settings first.');
     const canvas = await renderReceiptCanvas(m, dots);
@@ -70,6 +81,7 @@ export function testReceiptModel(): InvoiceModel {
 /** Sends the receipt image to any installed printer app (RawBT, printer vendor apps, …). */
 export async function shareReceiptToPrinterApp(m: InvoiceModel, s: PrinterSettings): Promise<string> {
   const { dots } = paperSpec(s);
+  if (isNative()) { try { return await printReceipt(m, { ...s, mode: 'rawbt' }); } catch { /* no RawBT: share the image instead */ } }
   const how = await shareFile(await buildReceiptPng(m, dots), `${m.number.replace(/[^A-Za-z0-9-]+/g, '_')}_Receipt.png`, { title: `Receipt ${m.number}` });
   return how === 'downloaded' ? 'Receipt image downloaded' : 'Choose your printer app (e.g. RawBT)';
 }
