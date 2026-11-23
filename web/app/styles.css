@@ -755,7 +755,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   .dialog-backdrop:has(.invoice-sheet) { padding: 0; place-items: stretch; }
   .invoice-sheet { border-radius: 0; max-height: 100dvh; height: 100dvh; padding: 14px 12px calc(14px + var(--safe-bottom, 0px)); }
   .native-app .invoice-sheet { padding-top: calc(14px + env(safe-area-inset-top, 0px)); }
-  .inv-actions { padding-right: 0; margin-top: 46px; }
+  .inv-actions { padding-right: 0; margin-top: 62px; }
+  .inv-wa > svg { display: none; }
+  .inv-wa > button { flex: 1 1 calc(50% - 8px); justify-content: center; font-size: 14px; }
   .inv-actions > button { flex: 1 1 calc(50% - 8px); justify-content: center; }
   .inv-actions .wa { flex-basis: 100%; }
   .inv-actions .icon-only { flex: 0 0 auto; }

@@ -57,7 +57,7 @@ export function toInvoiceModel(d: InvoiceDetail, settings?: Record<string, strin
       address: i.business_address || '', phone: i.business_phone || '', whatsapp: i.business_whatsapp || '', email: i.business_email || '',
     },
     customer: { name: i.shop_name, address: i.address || '', whatsapp: i.customer_whatsapp || i.whatsapp || '' },
-    paymentMethod: i.payment_method || '', paymentTerms: i.payment_terms || '', notes: i.notes || '', terms: i.terms || '',
+    paymentMethod: i.payment_method ? i.payment_method[0].toUpperCase() + i.payment_method.slice(1) : '', paymentTerms: i.payment_terms || '', notes: i.notes || '', terms: i.terms || '',
     lines: d.items.map((x, n) => ({
       no: n + 1, product: x.name, pack: x.label, qty: x.quantity, unit: x.unit_price_cents,
       shopPrice: showShopPrice && x.shop_price_cents ? x.shop_price_cents : null, discount: x.item_discount_cents, total: x.line_cents,
@@ -75,7 +75,7 @@ export function toInvoiceModel(d: InvoiceDetail, settings?: Record<string, strin
  * the final page. Capacities are tuned for the 794×1123 px page in
  * components/invoice-document.tsx.
  */
-export function paginate(lines: InvoiceLine[], cap = { first: 15, middle: 24, totalsBlock: 9 }): InvoiceLine[][] {
+export function paginate(lines: InvoiceLine[], cap = { first: 17, middle: 27, totalsBlock: 10 }): InvoiceLine[][] {
   const weight = (l: InvoiceLine) => (`${l.product} ${l.pack}`.length > 42 ? 2 : 1);
   const pages: InvoiceLine[][] = [[]];
   let used = 0;

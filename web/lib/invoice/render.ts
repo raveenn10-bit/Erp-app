@@ -58,7 +58,7 @@ export async function buildReceiptPdf(m: InvoiceModel, dots: number, paperMm: nu
   const canvas = await renderReceiptCanvas(m, dots);
   const h = (canvas.height / canvas.width) * paperMm;
   const pdf = new jsPDF({ unit: 'mm', format: [paperMm, Math.max(h, 40)], orientation: 'portrait' });
-  pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, paperMm, h);
+  pdf.addImage(canvas.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, paperMm, h);
   return pdf.output('blob');
 }
 
