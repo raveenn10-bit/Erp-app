@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Nugathalawa ERP</string>
+    <string name="title_activity_main">Nugathalawa ERP</string>
+    <string name="package_name">lk.com.harshapex.sanjeewaerp</string>
+    <string name="custom_url_scheme">lk.com.harshapex.sanjeewaerp</string>
+</resources>

@@ -48,12 +48,27 @@ import {
   ChevronRight,
   ReceiptText,
   UserRound,
+  BookOpen,
   Wallet,
   MoreHorizontal,
   TrendingUp,
+  Truck,
+  MapPin,
 } from "lucide-react";
 import { api, idempotency, money } from "@/lib/api";
 import { InvoiceActions } from "@/components/invoice-actions";
+import { CustomerAdminActions, ProductAdminActions, StockAdminActions } from "@/components/admin-records";
+import type { InvoiceDetail } from "@/lib/invoice/model";
+import { DutyPanel } from "@/components/duty-panel";
+import { LiveTracking } from "@/components/live-tracking";
+import { endDutyForLogout, initTracking } from "@/lib/tracking";
+import { BiometricSettings } from "@/components/biometric-login";
+import { UserGuide } from "@/components/user-guide";
+import { PrinterSettingsPanel } from "@/components/printer-settings";
+import { FreeIssueSettings } from "@/components/free-issue-settings";
+import { disableBiometric } from "@/lib/biometric";
+import { isNative } from "@/lib/native";
+import { ReportsPanel } from "@/components/reports-panel";
 import {
   NotificationBellAndDrawer,
   CreditAlertsDashboardPanel,
@@ -72,6 +87,7 @@ import {
   ConsignmentPanel,
   FreeIssuePanel,
 } from "@/components/distribution-panels";
+import { LogisticsPanel } from "@/components/logistics-panel";
 type User = { id: string; name: string; admin: number; role_id: string };
 type Summary = {
   totalSalesCents: number;
@@ -122,11 +138,18 @@ type Stock = {
   label: string;
   warehouse: string;
   quantity: number;
+  available_quantity?: number;
+  reserved_quantity?: number;
+  allocated_quantity?: number;
+  damaged_quantity?: number;
+  location_type?: string;
 };
 const menu = [
   { name: "Overview", si: "දළ විශ්ලේෂණය", icon: LayoutDashboard },
   { name: "Products", si: "නිෂ්පාදන", icon: Box },
   { name: "Inventory", si: "තොග", icon: Warehouse },
+  { name: "Distribution", si: "බෙදාහැරීම", icon: Truck },
+  { name: "Live Tracking", si: "සජීවී ලුහුබැඳීම", icon: MapPin },
   { name: "Customers", si: "ගනුදෙනුකරුවන්", icon: Building2 },
   { name: "Invoices", si: "බිල්පත් / POS", icon: FileText },
   { name: "Free Issues", si: "නොමිලේ නිකුත් කිරීම්", icon: Gift },
@@ -139,11 +162,14 @@ const menu = [
   { name: "Team", si: "කණ්ඩායම", icon: Users },
   { name: "Settings", si: "සැකසුම්", icon: Settings },
   { name: "Profile", si: "මගේ ගිණුම", icon: UserRound },
+  { name: "Help", si: "මාර්ගෝපදේශය", icon: BookOpen },
 ];
 const siLabel = (name: string) => menu.find((m) => m.name === name)?.si || "";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 20000 } },
 });
+// Offline sync finished uploading: refresh every screen so PENDING items show their server numbers.
+if (typeof window !== "undefined") window.addEventListener("erp-synced", () => { queryClient.invalidateQueries(); });
 export default function Dashboard() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -159,7 +185,15 @@ function Workspace() {
     [toast, setToast] = useState(""),
     [invoiceId, setInvoiceId] = useState<string | null>(null),
     [customerAccountId, setCustomerAccountId] = useState<string | null>(null),
-    [focusBilling, setFocusBilling] = useState(false);
+    [focusBilling, setFocusBilling] = useState(false),
+    [editInvoice, setEditInvoice] = useState<InvoiceDetail | null>(null),
+    [showVoided, setShowVoided] = useState(false),
+    [editingUser, setEditingUser] = useState<{ id: string; name: string; username?: string; role_id: string } | null>(null),
+    [editUsername, setEditUsername] = useState(""),
+    [editPassword, setEditPassword] = useState(""),
+    [editPasscode, setEditPasscode] = useState(""),
+    [editMsg, setEditMsg] = useState(""),
+    [editBusy, setEditBusy] = useState(false);
   const reduced = useReducedMotion();
   const me = useQuery({
     queryKey: ["me"],
@@ -169,7 +203,20 @@ function Workspace() {
   useEffect(() => {
     if (me.isError) router.replace("/login");
   }, [me.isError, router]);
+  // Android back button: close the drawer first, then return to Overview.
+  useEffect(() => {
+    const onBack = (e: Event) => {
+      if (open) { setOpen(false); e.preventDefault(); }
+      else if (tab !== "Overview") { setTab("Overview"); e.preventDefault(); }
+    };
+    window.addEventListener("erp-back", onBack);
+    return () => window.removeEventListener("erp-back", onBack);
+  }, [open, tab]);
   const user = me.data?.user;
+  // Resume a running duty (GPS) after reload / app restart, and send anything recorded offline.
+  useEffect(() => {
+    if (user?.id) void initTracking(user.id);
+  }, [user?.id]);
   const summary = useQuery({
     queryKey: ["dashboard"],
     queryFn: () => api<Summary>("/dashboard"),
@@ -272,7 +319,10 @@ function Workspace() {
     );
   if (!user) return null;
   const visibleMenu = menu.filter(
-    (i) => user.admin || !["Team", "Settings", "Reports", "Expenses"].includes(i.name),
+    (i) => user.admin || (
+      !["Team", "Settings", "Reports", "Expenses", "Live Tracking"].includes(i.name) &&
+      (i.name !== "Distribution" || user.role_id === "sales_rep")
+    ),
   );
   const roleLabel = user.admin ? "Admin" : "Sales Representative";
   const bottomItems = [
@@ -283,7 +333,18 @@ function Workspace() {
   ];
   const inBottom = bottomItems.some((b) => b.name === tab);
   async function signOut() {
-    await api("/logout", { method: "POST" });
+    // Sign out revokes the server session, so the biometric credential
+    // protecting it is useless: remove it from this phone as well.
+    if (isNative()) {
+      const off = await import("@/lib/offline/store");
+      const st = off.getSyncState();
+      const waiting = st.pending + st.conflicts + st.failed;
+      if (waiting && !confirm(`${waiting} item(s) are saved on this phone and not yet on the server. They stay on the phone and upload after you sign in again. Sign out anyway?`)) return;
+      await off.clearCache().catch(() => {});
+    }
+    await disableBiometric();
+    await endDutyForLogout();
+    await api("/logout", { method: "POST" }).catch(() => {});
     router.replace("/login");
   }
   return (
@@ -423,6 +484,7 @@ function Workspace() {
         >
           {customerAccountId && (
             <CustomerAccountModal
+              admin={!!user.admin}
               customerId={customerAccountId}
               onClose={() => setCustomerAccountId(null)}
               onViewInvoice={(id) => {
@@ -432,8 +494,29 @@ function Workspace() {
             />
           )}
           {invoiceId && (
-            <InvoiceActions id={invoiceId} close={() => setInvoiceId(null)} />
+            <InvoiceActions
+              id={invoiceId}
+              close={() => setInvoiceId(null)}
+              admin={!!user.admin}
+              onEdit={(d) => {
+                setInvoiceId(null);
+                setEditInvoice(d);
+                openBilling();
+              }}
+            />
           )}{" "}
+          {tab === "Overview" && !user.admin && (
+            <DutyPanel userId={user.id} customers={customers.data || []} />
+          )}
+          {tab === "Live Tracking" && user.admin && (
+            <>
+              <Lead
+                title="Live rep tracking · සජීවී නියෝජිත ලුහුබැඳීම"
+                subtitle="Where your sales reps are now, their route, distance and shop visits."
+              />
+              <LiveTracking />
+            </>
+          )}
           {tab === "Overview" && (
             <Overview
               user={user}
@@ -453,7 +536,7 @@ function Workspace() {
                 subtitle="Manage your catalogue and prices from one place."
               />
               <div className="panel">
-                <ProductTable rows={products.data || []} />
+                <ProductTable rows={products.data || []} admin={!!user.admin} />
               </div>
               {user.admin && (
                 <FormPanel title="Add a product">
@@ -479,6 +562,7 @@ function Workspace() {
                         <th>Type</th>
                         <th>Credit terms</th>
                         <th>Account</th>
+                        {user.admin && <th>Actions</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -515,6 +599,14 @@ function Workspace() {
                               Account
                             </button>
                           </td>
+                          {user.admin && (
+                            <td>
+                              <CustomerAdminActions
+                                c={c as never}
+                                reps={(staff.data || []).filter((x) => x.role_id === "sales_rep" && x.active).map((x) => ({ id: x.id, name: x.name }))}
+                              />
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -547,16 +639,28 @@ function Workspace() {
                         <th>Product</th>
                         <th>Variant</th>
                         <th>Warehouse</th>
-                        <th>Quantity</th>
+                        <th>Available</th>
+                        <th>Reserved</th>
+                        <th>Allocated</th>
+                        <th>Damaged</th>
+                        {user.admin && <th>Actions</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {(stocks.data || []).map((s, i) => (
-                        <tr key={i}>
+                        <tr key={`${s.warehouse_id}:${s.variant_id}`}>
                           <td>{s.name}</td>
                           <td>{s.label}</td>
                           <td>{s.warehouse}</td>
-                          <td>{s.quantity}</td>
+                          <td><b>{s.available_quantity ?? s.quantity}</b></td>
+                          <td>{s.reserved_quantity || 0}</td>
+                          <td>{s.allocated_quantity || 0}</td>
+                          <td>{s.damaged_quantity || 0}</td>
+                          {user.admin && (
+                            <td>
+                              <StockAdminActions warehouseId={s.warehouse_id} variantId={s.variant_id} quantity={s.quantity} />
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -583,6 +687,21 @@ function Workspace() {
               )}
             </>
           )}
+          {tab === "Distribution" && (
+            <>
+              <Lead
+                title="Distribution control"
+                subtitle="Warehouse, representative and vehicle stock through daily route reconciliation."
+              />
+              <LogisticsPanel
+                isAdmin={!!user.admin}
+                products={products.data || []}
+                stocks={stocks.data || []}
+                staff={staff.data || []}
+                customers={customers.data || []}
+              />
+            </>
+          )}
           {tab === "Invoices" && (
             <>
               <Lead
@@ -590,8 +709,14 @@ function Workspace() {
                 subtitle="Draft, preview, finalize, print and share professional invoices."
               />
               <div className="panel">
+                {user.admin && (invoices.data || []).some((i) => i.status === "cancelled") && (
+                  <label className="muted" style={{ display: "inline-flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
+                    <input type="checkbox" checked={showVoided} onChange={(e) => setShowVoided(e.target.checked)} />
+                    Show deleted (voided) invoices
+                  </label>
+                )}
                 <InvoiceTable
-                  rows={invoices.data || []}
+                  rows={(invoices.data || []).filter((i) => showVoided || i.status !== "cancelled")}
                   onSelect={setInvoiceId}
                 />
               </div>
@@ -600,7 +725,12 @@ function Workspace() {
                   customers={customers.data || []}
                   products={products.data || []}
                   stocks={stocks.data || []}
-                  onPosted={setInvoiceId}
+                  onPosted={(id) => {
+                    setEditInvoice(null);
+                    setInvoiceId(id);
+                  }}
+                  editInvoice={editInvoice}
+                  onCancelEdit={() => setEditInvoice(null)}
                 />
               </div>
             </>
@@ -682,7 +812,7 @@ function Workspace() {
               <CreditNotesPanel invoices={invoices.data || []} products={products.data || []} />
             </>
           )}
-          {tab === "Reports" && user.admin && <Reports />}
+          {tab === "Reports" && user.admin && <ReportsPanel />}
           {tab === "Team" && user.admin && (
             <>
               <Lead
@@ -694,39 +824,72 @@ function Workspace() {
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>Name</th>
-                        <th>Email</th>
+                                                <th>Name (නම)</th>
+                        <th>Username (පරිශීලක නාමය)</th>
                         <th>Role</th>
+                        <th>4-Digit PIN</th>
                         <th>Status</th>
                         <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(staff.data || []).map((s) => (
+                      {(staff.data || []).map((s: any) => (
                         <tr key={s.id}>
-                          <td>{s.name}</td>
-                          <td>{s.email}</td>
-                          <td>{s.role_id}</td>
+                          <td><strong>{s.name}</strong></td>
+                          <td>
+                            <code style={{ background: "var(--brand-background, #F3FAF6)", padding: "3px 8px", borderRadius: 6, fontWeight: 700, color: "var(--brand-primary, #0C5051)" }}>
+                              {s.username || s.name.toLowerCase().replace(/\s+/g, '')}
+                            </code>
+                          </td>
+                          <td>
+                            <span className="badge" style={{ textTransform: "capitalize" }}>
+                              {s.role_id?.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td>
+                            {s.has_passcode ? (
+                              <span style={{ color: "var(--brand-primary, #0C5051)", fontWeight: 700 }}>✓ Configured</span>
+                            ) : (
+                              <span style={{ color: "var(--brand-text-muted, #647773)" }}>— Not set</span>
+                            )}
+                          </td>
                           <td>
                             <span className="badge">
                               {s.active ? "Active" : "Inactive"}
                             </span>
                           </td>
                           <td>
-                            {s.id !== user.id && (
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <button
+                                type="button"
                                 className="secondary"
-                                onClick={() =>
-                                  submit(
-                                    `/users/${s.id}`,
-                                    { active: !s.active },
-                                    "PATCH",
-                                  )
-                                }
+                                style={{ padding: "4px 10px", fontSize: 12 }}
+                                onClick={() => {
+                                  setEditingUser(s);
+                                  setEditUsername(s.username || "");
+                                  setEditPassword("");
+                                  setEditPasscode("");
+                                  setEditMsg("");
+                                }}
                               >
-                                {s.active ? "Deactivate" : "Activate"}
+                                Edit Credentials
                               </button>
-                            )}
+                              {s.id !== user.id && (
+                                <button
+                                  className="secondary"
+                                  style={{ padding: "4px 10px", fontSize: 12 }}
+                                  onClick={() =>
+                                    submit(
+                                      `/users/${s.id}`,
+                                      { active: !s.active },
+                                      "PATCH",
+                                    )
+                                  }
+                                >
+                                  {s.active ? "Deactivate" : "Activate"}
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -747,16 +910,20 @@ function Workspace() {
               />
               <FormPanel title="Business profile">
                 <SettingsForm data={settings.data} submit={submit} />
+                <FreeIssueSettings />
               </FormPanel>
               <FormPanel title="Invoice print settings">
                 <BillingSettings />
               </FormPanel>
               <CreditAlertSettingsPanel />
               <div style={{ marginTop: 20 }}>
+                <BiometricSettings />
+              <PrinterSettingsPanel admin={!!user.admin} businessName={settings.data?.name || ""} />
                 <ChangePasswordPanel />
               </div>
             </>
           )}
+          {tab === "Help" && <UserGuide user={user} />}
           {tab === "Profile" && (
             <>
               <Lead
@@ -776,6 +943,8 @@ function Workspace() {
                 </button>
               </div>
               <div style={{ marginTop: 20 }}>
+                <BiometricSettings />
+              <PrinterSettingsPanel admin={!!user.admin} businessName={settings.data?.name || ""} />
                 <ChangePasswordPanel />
               </div>
             </>
@@ -783,58 +952,46 @@ function Workspace() {
         </motion.div>
       </main>
       <nav className="bottom-nav" aria-label="Quick navigation">
-        {bottomItems.map(({ name, label, icon: Icon, fab }) =>
-          fab ? (
-            <div className="bn-center" key={name}>
+        {[...bottomItems, { name: "__more", label: "More", icon: MoreHorizontal, fab: false }].map(
+          ({ name, label, icon: Icon, fab }) => {
+            const isMore = name === "__more";
+            const active = isMore ? !inBottom : tab === name;
+            return (
               <button
-                className={`bn-fab ${tab === name ? "active" : ""}`}
-                aria-label="Quick billing (POS) · ඉක්මන් බිල්පත"
-                aria-current={tab === name ? "page" : undefined}
-                onClick={openBilling}
+                key={name}
+                className={`bn-item ${fab ? "bn-fab-item" : ""} ${active ? "active" : ""}`}
+                aria-current={active && !isMore ? "page" : undefined}
+                aria-label={
+                  fab
+                    ? "Quick billing (POS) · ඉක්මන් බිල්පත"
+                    : isMore
+                      ? "More menu · තවත්"
+                      : `${name} · ${siLabel(name)}`
+                }
+                {...(isMore ? { "aria-controls": "app-drawer", "aria-expanded": open } : {})}
+                onClick={fab ? openBilling : isMore ? () => setOpen(true) : () => changeTab(name)}
               >
-                <Plus size={26} strokeWidth={2.4} />
+                {fab ? (
+                  <span className="bn-fab" aria-hidden="true">
+                    <Plus size={26} strokeWidth={2.4} />
+                  </span>
+                ) : (
+                  <span className="bn-icon" aria-hidden="true">
+                    {active && (
+                      <motion.span
+                        layoutId={reduced ? undefined : "bn-active"}
+                        className="bn-pill"
+                        transition={{ type: "spring", stiffness: 480, damping: 34 }}
+                      />
+                    )}
+                    <Icon size={20} />
+                  </span>
+                )}
+                <span className="bn-label">{label}</span>
               </button>
-              <span className="bn-fab-label" aria-hidden="true">
-                {label}
-              </span>
-            </div>
-          ) : (
-            <button
-              key={name}
-              className={`bn-item ${tab === name ? "active" : ""}`}
-              aria-current={tab === name ? "page" : undefined}
-              aria-label={`${name} · ${siLabel(name)}`}
-              onClick={() => changeTab(name)}
-            >
-              {tab === name && (
-                <motion.span
-                  layoutId={reduced ? undefined : "bn-active"}
-                  className="bn-pill"
-                  transition={{ type: "spring", stiffness: 480, damping: 34 }}
-                />
-              )}
-              <Icon size={20} />
-              <span>{label}</span>
-            </button>
-          ),
+            );
+          },
         )}
-        <button
-          className={`bn-item ${!inBottom ? "active" : ""}`}
-          aria-label="More menu · තවත්"
-          aria-controls="app-drawer"
-          aria-expanded={open}
-          onClick={() => setOpen(true)}
-        >
-          {!inBottom && (
-            <motion.span
-              layoutId={reduced ? undefined : "bn-active"}
-              className="bn-pill"
-              transition={{ type: "spring", stiffness: 480, damping: 34 }}
-            />
-          )}
-          <MoreHorizontal size={20} />
-          <span>More</span>
-        </button>
       </nav>
     </div>
   );
@@ -1252,7 +1409,7 @@ function InvoiceTable({
         </thead>
         <tbody>
           {rows.map((i) => (
-            <tr key={i.id}>
+            <tr key={i.id} className={i.status === "cancelled" ? "voided" : undefined}>
               <td>
                 {onSelect ? (
                   <button
@@ -1270,8 +1427,8 @@ function InvoiceTable({
               <td>{money(i.total_cents - i.paid_cents)}</td>
               <td>{i.due_at || "Paid"}</td>
               <td>
-                <span className={`badge ${i.due_at ? "due" : ""}`}>
-                  {i.status}
+                <span className={`badge ${i.status === "cancelled" ? "danger" : i.due_at ? "due" : ""}`}>
+                  {i.status === "cancelled" ? "deleted" : i.status}
                 </span>
               </td>
             </tr>
@@ -1284,7 +1441,7 @@ function InvoiceTable({
     </div>
   );
 }
-function ProductTable({ rows }: { rows: Product[] }) {
+function ProductTable({ rows, admin }: { rows: Product[]; admin?: boolean }) {
   return (
     <div className="table-wrap">
       <table className="data-table">
@@ -1297,6 +1454,7 @@ function ProductTable({ rows }: { rows: Product[] }) {
             <th>Retail</th>
             <th>Shop selling</th>
             <th>Main stock</th>
+            {admin && <th>Actions</th>}
           </tr>
         </thead>
         <tbody>
@@ -1311,6 +1469,15 @@ function ProductTable({ rows }: { rows: Product[] }) {
               <td>{money(x.retail_cents)}</td>
               <td>{x.shop_price_cents ? money(x.shop_price_cents) : "—"}</td>
               <td>{x.main_stock}</td>
+              {admin && (
+                <td>
+                  {rows.findIndex((r) => r.id === x.id) === rows.indexOf(x) ? (
+                    <ProductAdminActions productId={x.id} name={x.name} />
+                  ) : (
+                    <span className="muted" style={{ fontSize: 12 }}>↑ same product</span>
+                  )}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -1754,8 +1921,10 @@ function StaffForm({ submit }: { submit: (p: string, v: unknown) => void }) {
     const d = val(e);
     submit("/users", {
       name: d.name,
-      email: d.email,
+      username: d.username,
+      email: d.email || undefined,
       password: d.password,
+      passcode: d.passcode || undefined,
       roleId: d.roleId,
     });
     e.currentTarget.reset();
@@ -1764,19 +1933,27 @@ function StaffForm({ submit }: { submit: (p: string, v: unknown) => void }) {
     <form onSubmit={onSubmit}>
       <div className="form-grid">
         <label>
-          Full name
-          <input name="name" required />
+          Full name (සම්පූර්ණ නම)
+          <input name="name" required placeholder="e.g. Kamal Perera" />
         </label>
         <label>
-          Email
-          <input type="email" name="email" required />
+          Username (පරිශීලක නාමය)
+          <input name="username" required placeholder="e.g. kamal_rep" minLength={2} />
         </label>
         <label>
-          Temporary password (8+ characters)
-          <input name="password" type="password" minLength={8} required />
+          Password (මුරපදය)
+          <input name="password" type="password" minLength={6} required placeholder="Password (min 6 chars)" />
         </label>
         <label>
-          Role
+          4-Digit Quick PIN (අංක 4 කේතය - Optional)
+          <input name="passcode" type="password" inputMode="numeric" maxLength={4} placeholder="e.g. 1234" />
+        </label>
+        <label>
+          Email (ඊමේල් - Optional)
+          <input type="email" name="email" placeholder="Optional (defaults to username@nugathalawa.erp)" />
+        </label>
+        <label>
+          Role (භූමිකාව)
           <select name="roleId">
             <option value="sales_rep">Sales Representative</option>
             <option value="staff">Staff</option>
@@ -1785,7 +1962,7 @@ function StaffForm({ submit }: { submit: (p: string, v: unknown) => void }) {
         </label>
       </div>
       <div className="form-actions">
-        <button className="primary">Create account</button>
+        <button className="primary">Create account (ගිණුම සාදන්න)</button>
       </div>
     </form>
   );
@@ -1824,122 +2001,5 @@ function SettingsForm({
         <button className="primary">Save settings</button>
       </div>
     </form>
-  );
-}
-
-function Reports() {
-  const [kind, setKind] = useState("daily-sales"),
-    [from, setFrom] = useState(
-      new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
-    ),
-    [to, setTo] = useState(new Date().toISOString().slice(0, 10));
-  const report = useQuery({
-    queryKey: ["report", kind, from, to],
-    queryFn: () =>
-      api<Record<string, string | number>[]>(
-        `/reports/${kind}?from=${from}&to=${to}`,
-      ),
-  });
-  function csv() {
-    const rows = report.data || [];
-    if (!rows.length) return;
-    const keys = Object.keys(rows[0]);
-    const escape = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
-    const content = [
-      keys.map(escape).join(","),
-      ...rows.map((row) => keys.map((k) => escape(row[k])).join(",")),
-    ].join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob([content], { type: "text/csv;charset=utf-8" }),
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${kind}-${from}-${to}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-  return (
-    <>
-      <Lead
-        title="Business reports"
-        subtitle="Live operational data, filtered by date and ready to export."
-      />
-      <div className="panel">
-        <div className="form-grid">
-          <label>
-            Report
-            <select value={kind} onChange={(e) => setKind(e.target.value)}>
-              {[
-                ["daily-sales", "Daily sales"],
-                ["product-sales", "Product sales & profit"],
-                ["outstanding", "Customer outstanding"],
-                ["collections", "Payment collections"],
-                ["stock-movements", "Stock movements"],
-              ].map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            From
-            <input
-              type="date"
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-            />
-          </label>
-          <label>
-            To
-            <input
-              type="date"
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-            />
-          </label>
-        </div>
-        <div className="form-actions">
-          <button
-            className="secondary"
-            disabled={!report.data?.length}
-            onClick={csv}
-          >
-            <Download size={17} />
-            Export CSV
-          </button>
-        </div>
-      </div>
-      <div className="panel" style={{ marginTop: 20 }}>
-        {report.isLoading ? (
-          <div className="loader" />
-        ) : report.isError ? (
-          <div className="error">Could not load this report.</div>
-        ) : report.data?.length ? (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  {Object.keys(report.data[0]).map((k) => (
-                    <th key={k}>{k.replaceAll("_", " ")}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {report.data.map((row, i) => (
-                  <tr key={i}>
-                    {Object.values(row).map((v, j) => (
-                      <td key={j}>{v ?? "—"}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty text="No records in this date range." />
-        )}
-      </div>
-    </>
   );
 }

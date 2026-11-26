@@ -13,10 +13,10 @@ bootstrap-admin.ps1
 
 
 # Android / Capacitor
-android/app/build/
-android/build/
-android/.gradle/
-android/local.properties
+web/android/app/build/
+web/android/build/
+web/android/.gradle/
+web/android/local.properties
 *.jks
 *.keystore
-android/keystore.properties
+web/android/keystore.properties

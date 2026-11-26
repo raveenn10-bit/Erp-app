@@ -10,6 +10,7 @@ import {
   type Env,
   type Principal,
 } from "./security";
+import { voidInvoiceStatements } from "./admin-records";
 import { dueDate, invoiceTotals, lineTotal, normalizeWhatsApp, formatWhatsApp, type Discount } from "./finance";
 
 const routes = new Hono<Env>();
@@ -28,6 +29,7 @@ const invoiceLine = z.object({
 const billingInput = z.object({
   customerId: z.string().min(1),
   warehouseId: z.string().min(1),
+  routeId: z.string().min(1).optional(),
   idempotencyKey: key,
   invoiceDate: z.string().date(),
   items: z.array(invoiceLine).min(1),
@@ -40,6 +42,8 @@ const billingInput = z.object({
   terms: z.string().max(1500).default(""),
   customerWhatsapp: z.string().max(40).optional().default(""),
   draftId: z.string().optional(),
+  /** Admin edit: void this posted invoice and post the new one in the same transaction. */
+  replacesInvoiceId: z.string().min(1).optional(),
 });
 const distributionItems = z
   .array(
@@ -83,6 +87,25 @@ async function checkScope(
   if (!customer) return c.json({ error: "Customer not assigned" }, 403);
   if (!warehouse) return c.json({ error: "Stock location not assigned" }, 403);
   return null;
+}
+
+async function validateRouteSource(
+  db: D1Database,
+  p: Principal,
+  routeId: string | undefined,
+  warehouseId: string,
+  customerId: string,
+) {
+  if (!routeId) return;
+  const route = await db.prepare(
+    `SELECT r.sales_rep_id,r.status,v.stock_warehouse_id,
+      EXISTS(SELECT 1 FROM daily_route_customers rc WHERE rc.route_id=r.id AND rc.customer_id=?) customer_on_route
+     FROM daily_routes r JOIN vehicles v ON v.id=r.vehicle_id WHERE r.id=?`,
+  ).bind(customerId,routeId).first<any>();
+  if(!route || route.status!=="In Progress") throw new Error("An in-progress route is required");
+  if(!p.admin && route.sales_rep_id!==p.id) throw new Error("Route is not assigned to this sales representative");
+  if(!route.customer_on_route) throw new Error("Shop is not assigned to the selected route");
+  if(route.stock_warehouse_id!==warehouseId) throw new Error("Use the assigned vehicle stock location");
 }
 
 type VariantRow = {
@@ -133,8 +156,29 @@ async function postInvoice(
       .bind(input.idempotencyKey)
       .first();
   if (existing) return { existing };
+  if (input.replacesInvoiceId && !p.admin)
+    throw new Error("Only an admin can edit a posted invoice");
   if (new Set(input.items.map((x) => x.variantId)).size !== input.items.length)
     throw new Error("Duplicate product variants are not allowed");
+  let stockWarehouseId = input.warehouseId;
+  if (input.routeId) {
+    const route = await db.prepare(
+      `SELECT r.id,r.sales_rep_id,r.status,v.stock_warehouse_id,
+        EXISTS(SELECT 1 FROM daily_route_customers rc WHERE rc.route_id=r.id AND rc.customer_id=?) AS customer_on_route
+       FROM daily_routes r JOIN vehicles v ON v.id=r.vehicle_id WHERE r.id=?`,
+    ).bind(input.customerId, input.routeId).first<{
+      id:string;sales_rep_id:string;status:string;stock_warehouse_id:string;customer_on_route:number
+    }>();
+    if (!route || route.status !== "In Progress")
+      throw new Error("An in-progress route is required for route sales");
+    if (!p.admin && route.sales_rep_id !== p.id)
+      throw new Error("Route is not assigned to this sales representative");
+    if (!route.customer_on_route)
+      throw new Error("Shop is not assigned to the selected route");
+    if (input.warehouseId !== route.stock_warehouse_id)
+      throw new Error("Route invoice must use the assigned vehicle stock location");
+    stockWarehouseId = route.stock_warehouse_id;
+  }
   const customer = await db
     .prepare(
       "SELECT id,credit_days,credit_limit_cents,whatsapp,phone FROM customers WHERE id=? AND active=1",
@@ -142,7 +186,7 @@ async function postInvoice(
     .bind(input.customerId)
     .first<{ id: string; credit_days: number; credit_limit_cents: number; whatsapp: string; phone: string }>();
   if (!customer) throw new Error("Customer unavailable");
-  const scope = await checkScope(c, p, input.customerId, input.warehouseId);
+  const scope = await checkScope(c, p, input.customerId, stockWarehouseId);
   if (scope) return { response: scope };
   const rows = await variants(
     db,
@@ -196,7 +240,7 @@ async function postInvoice(
         number,
         input.customerId,
         p.id,
-        input.warehouseId,
+        stockWarehouseId,
         totals.totalCents,
         input.amountPaidCents,
         "posted",
@@ -217,6 +261,13 @@ async function postInvoice(
         shareToken,
       ),
   ];
+  let replaced: Awaited<ReturnType<typeof voidInvoiceStatements>> | null = null;
+  if (input.replacesInvoiceId) {
+    replaced = await voidInvoiceStatements(db, input.replacesInvoiceId);
+    // Void first: returns the old stock and releases the old credit before the new invoice is checked.
+    statements.unshift(...replaced.statements);
+  }
+  if(input.routeId) statements.push(db.prepare("INSERT INTO distribution_entity_routes(entity_type,entity_id,route_id) VALUES('invoice',?,?)").bind(id,input.routeId));
   for (const item of calculated) {
     const itemDiscount = invoiceTotals([
       {
@@ -244,15 +295,16 @@ async function postInvoice(
         ),
     );
     if (!skipStock) {
+      const movementId=uuid();
       statements.push(
         db
           .prepare(
             "INSERT INTO stock_movements(id,variant_id,from_warehouse,to_warehouse,quantity,reason,reference_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
           )
           .bind(
-            uuid(),
+            movementId,
             item.variantId,
-            input.warehouseId,
+            stockWarehouseId,
             null,
             item.quantity,
             "sale",
@@ -260,12 +312,13 @@ async function postInvoice(
             created,
           ),
       );
+      if(input.routeId) statements.push(db.prepare("INSERT INTO stock_movement_metadata(movement_id,transaction_reference,actor_id,route_id,transfer_id) VALUES(?,?,?,?,NULL)").bind(movementId,number,p.id,input.routeId));
       statements.push(
         db
           .prepare(
             "UPDATE stock_balances SET quantity=quantity-? WHERE warehouse_id=? AND variant_id=?",
           )
-          .bind(item.quantity, input.warehouseId, item.variantId),
+          .bind(item.quantity, stockWarehouseId, item.variantId),
       );
     }
   }
@@ -297,8 +350,10 @@ async function postInvoice(
     p.id,
     "invoice.posted",
     id,
-    JSON.stringify({ sourceType, sourceId, totals }),
+    JSON.stringify({ sourceType, sourceId, routeId: input.routeId || null, stockWarehouseId, totals, replacesInvoiceId: input.replacesInvoiceId || null }),
   );
+  if (replaced)
+    await audit(db, p.id, "invoice.voided", input.replacesInvoiceId!, JSON.stringify({ reason: "edited", replacedBy: id, ...replaced.snapshot }));
   return {
     invoice: {
       id,
@@ -326,14 +381,47 @@ routes.post("/billing/invoices", async (c) => {
 });
 
 routes.get("/billing/settings", async (c) => {
-  const denied = await guard(c, "settings.view");
-  if (denied) return denied;
+  // Read-only invoice defaults (terms, shop price / WhatsApp display): sales reps need them to bill.
+  const p = current(c);
+  if (!(await permission(c, p, "settings.view")) && !(await permission(c, p, "invoices.view")))
+    return c.json({ error: "Forbidden" }, 403);
   const rows = (
     await c.env.DB.prepare(
       "SELECT key,value FROM system_settings WHERE key IN('invoice_show_shop_price','invoice_default_terms','invoice_show_customer_whatsapp')",
     ).all<{ key: string; value: string }>()
   ).results;
   return c.json(Object.fromEntries(rows.map((x) => [x.key, x.value])));
+});
+// Read-only invoice/receipt presentation settings for anyone who can view invoices
+// (sales reps print bills but have no settings.view permission).
+routes.get("/billing/print-settings", async (c) => {
+  const denied = await guard(c, "invoices.view");
+  if (denied) return denied;
+  const rows = (
+    await c.env.DB.prepare(
+      "SELECT key,value FROM system_settings WHERE key IN('invoice_show_shop_price','invoice_show_customer_whatsapp','thermal_printer','free_issue_rules')",
+    ).all<{ key: string; value: string }>()
+  ).results;
+  const map = Object.fromEntries(rows.map((x) => [x.key, x.value]));
+  let thermal: unknown = null;
+  try {
+    thermal = map.thermal_printer ? JSON.parse(map.thermal_printer) : null;
+  } catch {
+    thermal = null;
+  }
+  // null = never configured → the app uses its built-in default (50g/100g/200g: 12 → 1, 24 → 3).
+  let freeIssueRules: unknown = null;
+  try {
+    freeIssueRules = map.free_issue_rules ? JSON.parse(map.free_issue_rules) : null;
+  } catch {
+    freeIssueRules = null;
+  }
+  return c.json({
+    showShopPrice: map.invoice_show_shop_price === "true",
+    showCustomerWhatsapp: map.invoice_show_customer_whatsapp !== "false",
+    thermal,
+    freeIssueRules,
+  });
 });
 routes.patch("/billing/settings", async (c) => {
   const denied = await guard(c, "settings.edit");
@@ -344,6 +432,28 @@ routes.patch("/billing/settings", async (c) => {
       showShopPrice: z.boolean().optional(),
       showCustomerWhatsapp: z.boolean().optional(),
       defaultTerms: z.string().max(1500).optional(),
+      thermalPrinter: z
+        .object({
+          paperWidthMm: z.number().min(40).max(120),
+          printableWidthMm: z.number().min(30).max(120),
+          fontSizePx: z.number().min(8).max(18),
+          marginMm: z.number().min(0).max(10),
+          showLogo: z.boolean(),
+          copies: z.number().int().min(1).max(5),
+        })
+        .refine((t) => t.printableWidthMm <= t.paperWidthMm, "Printable width cannot exceed paper width")
+        .optional(),
+      // Buy-X-get-Y free issue offers applied while billing (e.g. 12 → 1 free, 24 → 3 free).
+      freeIssueRules: z
+        .array(
+          z.object({
+            variantId: z.string().min(1).max(64),
+            active: z.boolean(),
+            tiers: z.array(z.object({ buy: z.number().int().min(1).max(100000), free: z.number().int().min(1).max(100000) })).min(1).max(10),
+          }),
+        )
+        .max(300)
+        .optional(),
     }),
   );
   const stmts: any[] = [];
@@ -359,6 +469,20 @@ routes.patch("/billing/settings", async (c) => {
       c.env.DB.prepare(
         "INSERT INTO system_settings(key,value) VALUES('invoice_show_customer_whatsapp',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
       ).bind(String(d.showCustomerWhatsapp)),
+    );
+  }
+  if (d.freeIssueRules !== undefined) {
+    stmts.push(
+      c.env.DB.prepare(
+        "INSERT INTO system_settings(key,value) VALUES('free_issue_rules',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      ).bind(JSON.stringify(d.freeIssueRules)),
+    );
+  }
+  if (d.thermalPrinter !== undefined) {
+    stmts.push(
+      c.env.DB.prepare(
+        "INSERT INTO system_settings(key,value) VALUES('thermal_printer',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      ).bind(JSON.stringify(d.thermalPrinter)),
     );
   }
   if (d.defaultTerms !== undefined) {
@@ -496,6 +620,7 @@ routes.delete("/invoice-drafts/:id", async (c) => {
 const freeIssueInput = z.object({
   customerId: z.string(),
   warehouseId: z.string(),
+  routeId: z.string().optional(),
   issueDate: z.string().date(),
   reason: z.enum(["sample", "promotion", "trial", "replacement", "other"]),
   notes: z.string().max(1000).default(""),
@@ -535,6 +660,8 @@ routes.post("/free-issues", async (c) => {
   if (existing) return c.json(existing);
   if (new Set(d.items.map((x) => x.variantId)).size !== d.items.length)
     return c.json({ error: "Duplicate variants" }, 400);
+  try { await validateRouteSource(db,p,d.routeId,d.warehouseId,d.customerId); }
+  catch(error){ return c.json({error:(error as Error).message},409); }
   const scope = await checkScope(c, p, d.customerId, d.warehouseId);
   if (scope) return scope;
   const rows = await variants(
@@ -567,6 +694,7 @@ routes.post("/free-issues", async (c) => {
           null,
         ),
     ];
+  if(d.routeId) statements.push(db.prepare("INSERT INTO distribution_entity_routes(entity_type,entity_id,route_id) VALUES('free_issue',?,?)").bind(id,d.routeId));
   for (const item of d.items) {
     const v = rows.get(item.variantId)!;
     statements.push(
@@ -577,13 +705,14 @@ routes.post("/free-issues", async (c) => {
         .bind(uuid(), id, item.variantId, item.quantity, v.cost_cents),
     );
     if (d.status === "confirmed") {
+      const movementId=uuid();
       statements.push(
         db
           .prepare(
             "INSERT INTO stock_movements(id,variant_id,from_warehouse,to_warehouse,quantity,reason,reference_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
           )
           .bind(
-            uuid(),
+            movementId,
             item.variantId,
             d.warehouseId,
             null,
@@ -593,6 +722,7 @@ routes.post("/free-issues", async (c) => {
             stamp,
           ),
       );
+      if(d.routeId) statements.push(db.prepare("INSERT INTO stock_movement_metadata(movement_id,transaction_reference,actor_id,route_id,transfer_id) VALUES(?,?,?,?,NULL)").bind(movementId,reference,p.id,d.routeId));
       statements.push(
         db
           .prepare(
@@ -697,6 +827,7 @@ routes.get("/free-issues/:id", async (c) => {
 const consignmentInput = z.object({
   customerId: z.string(),
   warehouseId: z.string(),
+  routeId: z.string().optional(),
   issueDate: z.string().date(),
   expectedSettlementDate: z.string().date().nullable().optional(),
   notes: z.string().max(1000).default(""),
@@ -743,6 +874,8 @@ routes.post("/consignments", async (c) => {
   if (existing) return c.json(existing);
   if (new Set(d.items.map((x) => x.variantId)).size !== d.items.length)
     return c.json({ error: "Duplicate variants" }, 400);
+  try { await validateRouteSource(db,p,d.routeId,d.warehouseId,d.customerId); }
+  catch(error){ return c.json({error:(error as Error).message},409); }
   const scope = await checkScope(c, p, d.customerId, d.warehouseId);
   if (scope) return scope;
   await variants(
@@ -774,7 +907,9 @@ routes.post("/consignments", async (c) => {
           null,
         ),
     ];
+  if(d.routeId) statements.push(db.prepare("INSERT INTO distribution_entity_routes(entity_type,entity_id,route_id) VALUES('consignment',?,?)").bind(id,d.routeId));
   for (const item of d.items) {
+    const movementId=uuid();
     statements.push(
       db
         .prepare(
@@ -794,7 +929,7 @@ routes.post("/consignments", async (c) => {
           "INSERT INTO stock_movements(id,variant_id,from_warehouse,to_warehouse,quantity,reason,reference_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
         )
         .bind(
-          uuid(),
+          movementId,
           item.variantId,
           d.warehouseId,
           null,
@@ -804,6 +939,7 @@ routes.post("/consignments", async (c) => {
           stamp,
         ),
     );
+    if(d.routeId) statements.push(db.prepare("INSERT INTO stock_movement_metadata(movement_id,transaction_reference,actor_id,route_id,transfer_id) VALUES(?,?,?,?,NULL)").bind(movementId,reference,p.id,d.routeId));
     statements.push(
       db
         .prepare(

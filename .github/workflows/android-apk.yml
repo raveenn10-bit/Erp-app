@@ -1,0 +1,206 @@
+name: Android APK
+
+# Builds the Sanjeewa Distribution ERP Android app. This workflow never deploys
+# anything: no Wrangler, no D1, no Cloudflare credentials are used here.
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Also build a release-signed APK (requires signing secrets)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # Public HTTPS address of the existing production ERP Worker (not a secret).
+      NEXT_PUBLIC_API_URL: https://sanjeewa-distribution-erp.charshan59.workers.dev
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check API URL is configured
+        run: |
+          if [ -z "$NEXT_PUBLIC_API_URL" ]; then
+            echo "::error title=ERP_API_URL missing::Add a repository variable ERP_API_URL with the HTTPS address of the ERP Worker (e.g. https://sanjeewa-distribution-erp.<account>.workers.dev)."
+            exit 1
+          fi
+          case "$NEXT_PUBLIC_API_URL" in https://*) ;; *) echo "::error::ERP_API_URL must start with https://"; exit 1;; esac
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Offline sync policy tests
+        run: |
+          node --experimental-strip-types --no-warnings scripts/offline-policy.test.mjs
+          node --experimental-strip-types --no-warnings scripts/free-issue.test.mjs
+
+      - name: Build Android web bundle
+        run: |
+          export NEXT_PUBLIC_BUILD_CODE=${{ github.run_number }}
+          export NEXT_PUBLIC_NATIVE_VERSION=$(tr -dc '0-9' < web/native-version.txt)
+          echo "Build code $NEXT_PUBLIC_BUILD_CODE, native version $NEXT_PUBLIC_NATIVE_VERSION"
+          npm run build -w web
+
+      - name: Package live-update bundle
+        run: |
+          mkdir -p bundle
+          (cd web/out && zip -qr ../../bundle/bundle.zip .)
+          tr -dc '0-9' < web/native-version.txt > bundle/native-version
+          ls -la bundle
+
+      - name: Upload live-update bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-bundle
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 30
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Install Android SDK packages
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+      - name: Capacitor sync
+        working-directory: web
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: web/android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug \
+            -PversionCode=${{ github.run_number }} \
+            -PversionName=1.0.${{ github.run_number }}
+
+      - name: Collect debug APK
+        run: |
+          mkdir -p dist
+          cp web/android/app/build/outputs/apk/debug/app-debug.apk "dist/Sanjeewa-ERP-debug-1.0.${{ github.run_number }}.apk"
+          ls -la dist
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sanjeewa-ERP-Android
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ---------- Optional release build (manual run only) ----------
+      - name: Build release-signed APK
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release }}
+        working-directory: web/android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then echo "::error::Signing secrets are not configured"; exit 1; fi
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+          echo "$KEYSTORE_B64" | base64 -d > "$ANDROID_KEYSTORE_PATH"
+          ./gradlew --no-daemon assembleRelease \
+            -PversionCode=${{ github.run_number }} \
+            -PversionName=1.0.${{ github.run_number }}
+          rm -f "$ANDROID_KEYSTORE_PATH"
+          mkdir -p ../../dist-release
+          cp app/build/outputs/apk/release/app-release.apk "../../dist-release/Sanjeewa-ERP-1.0.${{ github.run_number }}.apk"
+
+      - name: Upload release APK
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sanjeewa-ERP-Android-Release
+          path: dist-release/*.apk
+          if-no-files-found: error
+          retention-days: 90
+
+  # Publishes every pushed build as a GitHub Release so the phone can download
+  # the APK directly from one fixed link (no GitHub login, no zip):
+  #   https://github.com/raveenn10-bit/Erp-app/releases/latest/download/Nugathalawa-ERP.apk
+  publish:
+    needs: build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: android-v1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Sanjeewa-ERP-Android
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-bundle
+          path: bundle
+
+      - name: Write live-update manifest
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          SUM=$(sha256sum bundle/bundle.zip | cut -d' ' -f1)
+          NATIVE=$(cat bundle/native-version)
+          NOTE="${COMMIT_MSG%%$'\n'*}"
+          jq -n --argjson code ${{ github.run_number }} --arg version "1.0.${{ github.run_number }}" \
+            --argjson native "$NATIVE" --arg url "https://github.com/${GH_REPO}/releases/download/${TAG}/bundle.zip" \
+            --arg sum "$SUM" --arg notes "$NOTE" \
+            '{code:$code, version:$version, nativeVersion:$native, url:$url, checksum:$sum, notes:$notes}' > bundle/bundle.json
+          cat bundle/bundle.json
+
+      - name: Create release with fixed APK name
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          cp dist/*.apk Nugathalawa-ERP.apk
+          gh release create "$TAG" Nugathalawa-ERP.apk bundle/bundle.zip bundle/bundle.json \
+            --target "$GITHUB_SHA" \
+            --title "Nugathalawa ERP 1.0.${{ github.run_number }}" \
+            --notes "$(printf '%s\n\nAndroid test build from %s @ %s\nDirect download: https://github.com/%s/releases/latest/download/Nugathalawa-ERP.apk' "${COMMIT_MSG%%$'\n'*}" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" "$GH_REPO")" \
+            --latest
+
+      - name: Keep only the 5 newest app releases
+        run: |
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("android-v"))] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+          while read -r old; do gh release delete "$old" --yes --cleanup-tag; done

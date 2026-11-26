@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   FileDown,
@@ -10,6 +10,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, formatWhatsApp, idempotency, money, normalizeWhatsApp } from "@/lib/api";
+import { isNative, printDocumentSheet, publicOrigin, savePdfDoc, toast } from "@/lib/native";
+import type { InvoiceDetail } from "@/lib/invoice/model";
+import { describeTiers, effectiveRules, freeForLines, freeNote, type FreeIssueRule } from "@/lib/free-issue";
 
 export type Product = {
   variant_id: string;
@@ -40,6 +43,7 @@ type Line = {
   discountType: "fixed" | "percent";
   discountValue: number;
 };
+type ActiveRoute={id:string;route_name:string;route_date:string;registration_number:string;stock_warehouse_id:string;status:string};
 const today = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" });
 const cents = (value: number) =>
@@ -49,6 +53,11 @@ const percent = (base: number, value: number) =>
 const warehouses = (stocks: Stock[]) => [
   ...new Map(stocks.map((s) => [s.warehouse_id, s.warehouse])).entries(),
 ];
+
+/** After a sale/issue was saved offline (PENDING SYNC), clear the form like a normal post. */
+function resetLinesOffline(setLines: (f: (l: Line[]) => Line[]) => void) {
+  setLines((l) => l.slice(0, 1).map((x) => ({ ...x, variantId: "", quantity: 1 })));
+}
 
 export function BillingSettings() {
   const client = useQueryClient();
@@ -298,11 +307,16 @@ export function BillingPanel({
   products,
   stocks,
   onPosted,
+  editInvoice,
+  onCancelEdit,
 }: {
   customers: Customer[];
   products: Product[];
   stocks: Stock[];
   onPosted: (id: string) => void;
+  /** Admin edit: load this posted invoice; finalizing voids it and posts the new one. */
+  editInvoice?: InvoiceDetail | null;
+  onCancelEdit?: () => void;
 }) {
   const client = useQueryClient(),
     drafts = useQuery({
@@ -312,8 +326,16 @@ export function BillingPanel({
     settings = useQuery({
       queryKey: ["billing-settings"],
       queryFn: () => api<Record<string, string>>("/billing/settings"),
+    }),
+    activeRoutes = useQuery({queryKey:["daily-routes"],queryFn:()=>api<ActiveRoute[]>("/daily-routes")}),
+    printSettings = useQuery({
+      queryKey: ["print-settings"],
+      queryFn: () => api<{ freeIssueRules?: FreeIssueRule[] | null }>("/billing/print-settings"),
     });
+  const [applyFree, setApplyFree] = useState(true),
+    [freeOverride, setFreeOverride] = useState<Record<string, number>>({});
   const [customerId, setCustomer] = useState(""),
+    [routeId,setRouteId]=useState(""),
     [customerWhatsapp, setCustomerWhatsapp] = useState(""),
     [showLivePreview, setShowLivePreview] = useState(false),
     [warehouseId, setWarehouse] = useState("main"),
@@ -338,8 +360,11 @@ export function BillingPanel({
     [notes, setNotes] = useState(""),
     [terms, setTerms] = useState(""),
     [draftId, setDraftId] = useState<string | null>(null),
+    [replacing, setReplacing] = useState<{ id: string; number: string } | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const routeDetail=useQuery({queryKey:["route-detail",routeId],queryFn:()=>api<any>(`/daily-routes/${routeId}`),enabled:!!routeId});
+  const routeCustomerIds=useMemo(()=>new Set((routeDetail.data?.shops||[]).map((x:any)=>x.customer_id)),[routeDetail.data]);
   const totals = useMemo(() => {
     let subtotal = 0,
       itemDiscount = 0;
@@ -371,28 +396,52 @@ export function BillingPanel({
       total: afterItems - invoiceDiscount,
     };
   }, [lines, products, invoiceDiscountType, invoiceDiscountValue]);
+  // Free issue offers (Settings › Free issue offers): computed from the paid lines, editable per product.
+  const freeRules = useMemo(() => effectiveRules(printSettings.data?.freeIssueRules, products as Array<Product & { grams?: number | null }>), [printSettings.data, products]);
+  const autoFree = useMemo(() => freeForLines(lines, freeRules), [lines, freeRules]);
+  const freeLines = useMemo(() => {
+    if (!applyFree) return [] as Array<{ variantId: string; quantity: number; auto: number; priceType: Line["priceType"] }>;
+    const ids = new Set([...autoFree.keys(), ...Object.keys(freeOverride)]);
+    return [...ids]
+      .filter((id) => lines.some((l) => l.variantId === id))
+      .map((id) => ({
+        variantId: id,
+        auto: autoFree.get(id) || 0,
+        quantity: freeOverride[id] ?? autoFree.get(id) ?? 0,
+        priceType: lines.find((l) => l.variantId === id)!.priceType,
+      }));
+  }, [applyFree, autoFree, freeOverride, lines]);
   function payload(includePayment = true) {
     return {
       customerId,
       warehouseId,
+      routeId: routeId || undefined,
       invoiceDate,
+      // Free issue packets are merged into the product's own line: quantity + free,
+      // with the free packets' value as a fixed discount (one stock movement per product).
       items: lines
         .filter((x) => x.variantId)
-        .map((x) => ({
-          variantId: x.variantId,
-          quantity: x.quantity,
-          priceType: x.priceType,
-          discount:
-            x.discountValue > 0
-              ? {
-                  type: x.discountType,
-                  value:
-                    x.discountType === "percent"
-                      ? Math.round(x.discountValue * 100)
-                      : cents(x.discountValue),
-                }
-              : undefined,
-        })),
+        .map((x) => {
+          const p = products.find((v) => v.variant_id === x.variantId);
+          const unit = !p ? 0 : x.priceType === "retail" ? p.retail_cents : x.priceType === "shop" ? p.shop_price_cents : p.wholesale_cents;
+          const free = freeLines.find((f) => f.variantId === x.variantId)?.quantity || 0;
+          const gross = unit * x.quantity;
+          const own = x.discountValue > 0
+            ? x.discountType === "percent" ? percent(gross, x.discountValue) : Math.min(gross, cents(x.discountValue))
+            : 0;
+          if (free > 0) {
+            return { variantId: x.variantId, quantity: x.quantity + free, priceType: x.priceType, discount: { type: "fixed" as const, value: own + unit * free } };
+          }
+          return {
+            variantId: x.variantId,
+            quantity: x.quantity,
+            priceType: x.priceType,
+            discount:
+              x.discountValue > 0
+                ? { type: x.discountType, value: x.discountType === "percent" ? Math.round(x.discountValue * 100) : cents(x.discountValue) }
+                : undefined,
+          };
+        }),
       invoiceDiscount:
         invoiceDiscountValue > 0
           ? {
@@ -406,13 +455,20 @@ export function BillingPanel({
       paymentMethod,
       paymentTerms,
       dueAt: dueAt || null,
-      notes,
+      notes: freeNote(
+        freeLines.filter((f) => f.quantity > 0).map((f) => {
+          const p = products.find((v) => v.variant_id === f.variantId);
+          return { name: p ? `${p.name} · ${p.label}` : f.variantId, quantity: f.quantity };
+        }),
+        notes,
+      ),
       terms: terms || settings.data?.invoice_default_terms || "",
       ...(includePayment
         ? {
             amountPaidCents: cents(amountPaid),
             idempotencyKey: idempotency(),
             draftId: draftId || undefined,
+            replacesInvoiceId: replacing?.id,
           }
         : {}),
     };
@@ -427,7 +483,7 @@ export function BillingPanel({
       });
       await client.invalidateQueries({ queryKey: ["invoice-drafts"] });
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     } finally {
       setBusy(false);
     }
@@ -441,9 +497,10 @@ export function BillingPanel({
         body: JSON.stringify(payload(true)),
       });
       await client.invalidateQueries();
+      if (replacing) { setReplacing(null); setApplyFree(true); }
       onPosted(result.id);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     } finally {
       setBusy(false);
     }
@@ -475,22 +532,27 @@ export function BillingPanel({
       const totalStr = money(result.totalCents);
       const paidStr = money(result.paidCents);
       const balanceStr = money(Math.max(0, result.totalCents - result.paidCents));
-      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const origin = publicOrigin();
       const invoiceLink = result.shareToken
         ? `${origin}/view/invoice/${result.shareToken}`
         : `${origin}/dashboard`;
 
       const message = `Hello,\n\nYour invoice from Nugathalawa Ceylon Tea Export (Pvt) Ltd is ready.\n\nInvoice No: ${result.number}\nShop: ${shopName}\nTotal: ${totalStr}\nPaid: ${paidStr}\nBalance: ${balanceStr}\n\nView / Download Invoice:\n${invoiceLink}\n\nThank you!`;
 
-      window.open(
-        `https://wa.me/${normNumber}?text=${encodeURIComponent(message)}`,
-        "_blank",
-        "noopener,noreferrer"
-      );
+      // Android app: don't send the public link (that page renders unstyled on the
+      // production Worker). The invoice sheet opens next with "Send PDF on WhatsApp".
+      if (!isNative()) {
+        window.open(
+          `https://wa.me/${normNumber}?text=${encodeURIComponent(message)}`,
+          "_blank",
+          "noopener,noreferrer"
+        );
+      }
 
+      if (replacing) { setReplacing(null); setApplyFree(true); }
       onPosted(result.id);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     } finally {
       setBusy(false);
     }
@@ -545,7 +607,46 @@ export function BillingPanel({
     y += 5;
     pdf.setFont("helvetica", "bold");
     pdf.text(`Grand Total: ${(totals.total / 100).toFixed(2)}`, 195, y, { align: "right" });
-    pdf.save(`DRAFT-INVOICE-${invoiceDate}.pdf`);
+    await savePdfDoc(pdf, `DRAFT-INVOICE-${invoiceDate}.pdf`);
+  }
+
+  useEffect(() => {
+    if (!editInvoice) return;
+    const i = editInvoice.invoice;
+    setDraftId(null);
+    setReplacing({ id: i.id, number: i.number });
+    // Quantities already include free packets and their value is in the line discount,
+    // so don't add free issue again (admin can switch it back on).
+    setApplyFree(false);
+    setFreeOverride({});
+    setCustomer(i.customer_id || "");
+    setWarehouse(i.warehouse_id || "main");
+    setRouteId("");
+    setInvoiceDate(new Date(i.created_at).toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" }));
+    setLines(
+      editInvoice.items.map((x) => ({
+        variantId: x.variant_id || "",
+        quantity: x.quantity,
+        priceType: (["wholesale", "retail", "shop"].includes(x.price_type) ? x.price_type : "wholesale") as Line["priceType"],
+        discountType: "fixed",
+        discountValue: (x.item_discount_cents || 0) / 100,
+      })),
+    );
+    setInvoiceDiscountType("fixed");
+    setInvoiceDiscountValue((i.invoice_discount_cents || 0) / 100);
+    setAmountPaid((i.paid_cents || 0) / 100);
+    setPaymentMethod(i.payment_method || "cash");
+    setPaymentTerms(i.payment_terms || "");
+    setDueAt(i.due_at || "");
+    setNotes(i.notes || "");
+    setTerms(i.terms || "");
+    setCustomerWhatsapp(i.customer_whatsapp || "");
+    setError("");
+  }, [editInvoice]);
+  function stopEditing() {
+    setReplacing(null);
+    setApplyFree(true);
+    onCancelEdit?.();
   }
 
   function loadDraft(d: any) {
@@ -553,6 +654,7 @@ export function BillingPanel({
     setDraftId(d.id);
     setCustomer(p.customerId);
     setWarehouse(p.warehouseId);
+    setRouteId(p.routeId||"");
     setInvoiceDate(p.invoiceDate);
     setLines(
       (p.items || []).map((x: any) => ({
@@ -590,9 +692,28 @@ export function BillingPanel({
             </span>
           </div>
           {draftId && <span className="badge">Editing draft</span>}
+          {replacing && <span className="badge due">Editing {replacing.number}</span>}
         </div>
         {error && <div className="error">{error}</div>}
+        {replacing && (
+          <div className="admin-bar">
+            <span>
+              <b>{replacing.number}</b> සංස්කරණය කරනවා. Finalize කළාම පරණ invoice එක void වෙලා (stock ආපහු, ගෙවීම් reverse) මේ විස්තර එක්ක අලුත් invoice එකක් හැදෙනවා.
+            </span>
+            <button type="button" className="secondary small" onClick={stopEditing}>
+              <RotateCcw size={14} />
+              Cancel edit
+            </button>
+          </div>
+        )}
         <div className="form-grid">
+          <label>
+            Daily route (optional)
+            <select value={routeId} onChange={(e)=>{const id=e.target.value;setRouteId(id);const route=activeRoutes.data?.find(r=>r.id===id);if(route)setWarehouse(route.stock_warehouse_id)}}>
+              <option value="">Non-route invoice</option>
+              {(activeRoutes.data||[]).filter(r=>r.status==="In Progress").map(r=><option key={r.id} value={r.id}>{r.route_name} · {r.registration_number}</option>)}
+            </select>
+          </label>
           <label>
             Customer / Shop
             <select
@@ -601,7 +722,7 @@ export function BillingPanel({
               required
             >
               <option value="">Select a shop</option>
-              {customers.map((c) => (
+              {(routeId?customers.filter(c=>routeCustomerIds.has(c.id)):customers).map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.shop_name}
                 </option>
@@ -613,6 +734,7 @@ export function BillingPanel({
             <select
               value={warehouseId}
               onChange={(e) => setWarehouse(e.target.value)}
+              disabled={!!routeId}
             >
               {warehouses(stocks).map(([id, name]) => (
                 <option value={id} key={id}>
@@ -644,6 +766,46 @@ export function BillingPanel({
           </label>
         </div>
         <ProductLines lines={lines} setLines={setLines} products={products} />
+        <div className="free-box" aria-label="Free issue">
+          <label className="free-toggle">
+            <input type="checkbox" checked={applyFree} onChange={(e) => setApplyFree(e.target.checked)} />
+            <b>🎁 Free issue · <span lang="si">නොමිලේ</span></b>
+            <small>{freeRules.some((r) => r.active) ? "Offers from Settings are added automatically" : "No free issue offers set up yet (Settings › Free issue offers)"}</small>
+          </label>
+          {applyFree && freeLines.length > 0 && (
+            <ul className="free-list">
+              {freeLines.map((f) => {
+                const p = products.find((x) => x.variant_id === f.variantId);
+                const rule = freeRules.find((r) => r.variantId === f.variantId);
+                return (
+                  <li key={f.variantId}>
+                    <span>
+                      <b>{p ? `${p.name} · ${p.label}` : f.variantId}</b>
+                      <small>{rule ? describeTiers(rule.tiers) : "Manual"}{f.quantity !== f.auto ? ` · auto ${f.auto}` : ""}</small>
+                    </span>
+                    <span className="free-qty">
+                      <button type="button" className="secondary" aria-label="Fewer free" onClick={() => setFreeOverride((o) => ({ ...o, [f.variantId]: Math.max(0, f.quantity - 1) }))}>−</button>
+                      <b aria-live="polite">{f.quantity} FREE</b>
+                      <button type="button" className="secondary" aria-label="More free" onClick={() => setFreeOverride((o) => ({ ...o, [f.variantId]: f.quantity + 1 }))}>+</button>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {applyFree && (
+            <div className="free-add">
+              {lines.filter((l) => l.variantId && !freeLines.some((f) => f.variantId === l.variantId)).map((l) => {
+                const p = products.find((x) => x.variant_id === l.variantId);
+                return (
+                  <button key={l.variantId} type="button" className="secondary" onClick={() => setFreeOverride((o) => ({ ...o, [l.variantId]: 1 }))}>
+                    + Free {p ? p.label : "item"}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <div className="form-grid">
           <label>
             Invoice discount type
@@ -731,6 +893,7 @@ export function BillingPanel({
             </strong>
           </div>
         </div>
+        {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
         <div className="form-actions">
           <button
             className="secondary"
@@ -745,7 +908,7 @@ export function BillingPanel({
             disabled={busy || !customerId || !lines.some((x) => x.variantId)}
             onClick={post}
           >
-            Finalize invoice
+            {replacing ? `Save changes (replace ${replacing.number})` : "Finalize invoice"}
           </button>
           {draftId && (
             <button className="secondary" onClick={() => setDraftId(null)}>
@@ -818,8 +981,9 @@ export function FreeIssuePanel({
     history = useQuery({
       queryKey: ["free-issues"],
       queryFn: () => api<Issue[]>("/free-issues"),
-    }),
+    }),activeRoutes=useQuery({queryKey:["daily-routes"],queryFn:()=>api<ActiveRoute[]>("/daily-routes")}),
     [customerId, setCustomer] = useState(""),
+    [routeId,setRouteId]=useState(""),
     [warehouseId, setWarehouse] = useState("main"),
     [reason, setReason] = useState("sample"),
     [notes, setNotes] = useState(""),
@@ -836,6 +1000,8 @@ export function FreeIssuePanel({
     ]),
     [error, setError] = useState(""),
     [documentId, setDocumentId] = useState<string | null>(null);
+  const routeDetail=useQuery({queryKey:["route-detail",routeId],queryFn:()=>api<any>(`/daily-routes/${routeId}`),enabled:!!routeId});
+  const routeCustomerIds=useMemo(()=>new Set((routeDetail.data?.shops||[]).map((x:any)=>x.customer_id)),[routeDetail.data]);
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -845,6 +1011,7 @@ export function FreeIssuePanel({
         body: JSON.stringify({
           customerId,
           warehouseId,
+          routeId: routeId || undefined,
           issueDate: today(),
           reason,
           notes,
@@ -860,7 +1027,7 @@ export function FreeIssuePanel({
       await client.invalidateQueries({ queryKey: ["free-issues"] });
       setDocumentId(result.id);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     }
   }
   return (
@@ -884,6 +1051,7 @@ export function FreeIssuePanel({
         {error && <div className="error">{error}</div>}
         <form onSubmit={create}>
           <div className="form-grid">
+            <label>Daily route (optional)<select value={routeId} onChange={e=>{const id=e.target.value;setRouteId(id);const route=activeRoutes.data?.find(r=>r.id===id);if(route)setWarehouse(route.stock_warehouse_id)}}><option value="">Non-route issue</option>{(activeRoutes.data||[]).filter(r=>r.status==="In Progress").map(r=><option key={r.id} value={r.id}>{r.route_name} · {r.registration_number}</option>)}</select></label>
             <label>
               Shop
               <select
@@ -892,7 +1060,7 @@ export function FreeIssuePanel({
                 onChange={(e) => setCustomer(e.target.value)}
               >
                 <option value="">Select shop</option>
-                {customers.map((c) => (
+                {(routeId?customers.filter(c=>routeCustomerIds.has(c.id)):customers).map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.shop_name}
                   </option>
@@ -904,6 +1072,7 @@ export function FreeIssuePanel({
               <select
                 value={warehouseId}
                 onChange={(e) => setWarehouse(e.target.value)}
+                disabled={!!routeId}
               >
                 {warehouses(stocks).map(([id, name]) => (
                   <option key={id} value={id}>
@@ -954,7 +1123,8 @@ export function FreeIssuePanel({
             setLines={setLines}
             products={products}
           />
-          <div className="form-actions">
+          {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
+        <div className="form-actions">
             <button className="primary">Confirm free issue</button>
           </div>
         </form>
@@ -1032,7 +1202,7 @@ export function ConsignmentPanel({
     history = useQuery({
       queryKey: ["consignments"],
       queryFn: () => api<Consignment[]>("/consignments"),
-    }),
+    }),activeRoutes=useQuery({queryKey:["daily-routes"],queryFn:()=>api<ActiveRoute[]>("/daily-routes")}),
     [selected, setSelected] = useState<string | null>(null),
     detail = useQuery({
       queryKey: ["consignment", selected],
@@ -1040,6 +1210,7 @@ export function ConsignmentPanel({
       enabled: !!selected,
     }),
     [customerId, setCustomer] = useState(""),
+    [routeId,setRouteId]=useState(""),
     [warehouseId, setWarehouse] = useState("main"),
     [expected, setExpected] = useState(""),
     [notes, setNotes] = useState(""),
@@ -1055,6 +1226,8 @@ export function ConsignmentPanel({
       },
     ]),
     [error, setError] = useState("");
+  const routeDetailForIssue=useQuery({queryKey:["route-detail",routeId],queryFn:()=>api<any>(`/daily-routes/${routeId}`),enabled:!!routeId});
+  const routeCustomerIds=useMemo(()=>new Set((routeDetailForIssue.data?.shops||[]).map((x:any)=>x.customer_id)),[routeDetailForIssue.data]);
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -1064,6 +1237,7 @@ export function ConsignmentPanel({
         body: JSON.stringify({
           customerId,
           warehouseId,
+          routeId: routeId || undefined,
           issueDate: today(),
           expectedSettlementDate: expected || null,
           notes,
@@ -1082,7 +1256,7 @@ export function ConsignmentPanel({
       await client.invalidateQueries({ queryKey: ["consignments"] });
       setSelected(r.id);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     }
   }
   async function settle(e: React.FormEvent<HTMLFormElement>) {
@@ -1112,7 +1286,7 @@ export function ConsignmentPanel({
       await client.invalidateQueries();
       onInvoice(r.invoiceId);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     }
     void item;
   }
@@ -1136,7 +1310,7 @@ export function ConsignmentPanel({
       });
       await client.invalidateQueries();
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error)?.name === "OfflineQueuedError") { toast((e as Error).message); resetLinesOffline(setLines); } else { setError((e as Error).message); toast((e as Error).message); }
     }
   }
   return (
@@ -1159,6 +1333,7 @@ export function ConsignmentPanel({
         {error && <div className="error">{error}</div>}
         <form onSubmit={create}>
           <div className="form-grid">
+            <label>Daily route (optional)<select value={routeId} onChange={e=>{const id=e.target.value;setRouteId(id);const route=activeRoutes.data?.find(r=>r.id===id);if(route)setWarehouse(route.stock_warehouse_id)}}><option value="">Non-route consignment</option>{(activeRoutes.data||[]).filter(r=>r.status==="In Progress").map(r=><option key={r.id} value={r.id}>{r.route_name} · {r.registration_number}</option>)}</select></label>
             <label>
               Shop
               <select
@@ -1167,7 +1342,7 @@ export function ConsignmentPanel({
                 onChange={(e) => setCustomer(e.target.value)}
               >
                 <option value="">Select shop</option>
-                {customers.map((c) => (
+                {(routeId?customers.filter(c=>routeCustomerIds.has(c.id)):customers).map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.shop_name}
                   </option>
@@ -1179,6 +1354,7 @@ export function ConsignmentPanel({
               <select
                 value={warehouseId}
                 onChange={(e) => setWarehouse(e.target.value)}
+                disabled={!!routeId}
               >
                 {warehouses(stocks).map(([id, name]) => (
                   <option key={id} value={id}>
@@ -1224,7 +1400,8 @@ export function ConsignmentPanel({
             setLines={setLines}
             products={products}
           />
-          <div className="form-actions">
+          {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
+        <div className="form-actions">
             <button className="primary">Create delivery note</button>
           </div>
         </form>
@@ -1312,7 +1489,8 @@ export function ConsignmentPanel({
                   <option value="bank">Bank</option>
                 </select>
               </label>
-              <div className="form-actions">
+              {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
+        <div className="form-actions">
                 <button className="primary">Generate sales invoice</button>
               </div>
             </form>
@@ -1352,7 +1530,8 @@ export function ConsignmentPanel({
                 Received by
                 <input name="receivedBy" required />
               </label>
-              <div className="form-actions">
+              {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
+        <div className="form-actions">
                 <button className="primary">Record return</button>
               </div>
             </form>
@@ -1396,7 +1575,7 @@ async function pdfDocument(data: any, title: string, thermal = false) {
   y += 14;
   pdf.line(thermal ? 5 : 15, y, thermal ? 70 : 75, y);
   if (!thermal) pdf.line(130, y, 195, y);
-  pdf.save(`${data.record.reference_number}-${thermal ? "80mm" : "A4"}.pdf`);
+  await savePdfDoc(pdf, `${data.record.reference_number}-${thermal ? "80mm" : "A4"}.pdf`);
 }
 function shareDoc(data: any, title: string) {
   const phone = String(
@@ -1424,7 +1603,7 @@ function DocumentActions({ data, title }: { data: any; title: string }) {
         <Printer size={16} />
         80mm
       </button>
-      <button className="secondary" onClick={() => window.print()}>
+      <button className="secondary" onClick={(e) => printDocumentSheet(e.currentTarget, title)}>
         <Printer size={16} />
         Print
       </button>
