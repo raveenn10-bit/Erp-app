@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativePrintPlugin.class);
         registerPlugin(ThermalPrinterPlugin.class);
         registerPlugin(BiometricAuthPlugin.class);
+        registerPlugin(GpsTrackerPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }
